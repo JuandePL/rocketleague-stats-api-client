@@ -1,5 +1,5 @@
 {
-  "name": "rocketleague-stats-api",
+  "name": "rocketleague-stats-api-client",
   "version": "0.1.0",
   "description": "Fully typed WebSocket client for the official Rocket League Stats API, with runtime type guards for every event and command.",
   "keywords": [
@@ -13,6 +13,10 @@
   ],
   "author": "JuandePL",
   "license": "MIT",
+  "repository": {
+    "url": "https://github.com/JuandePL/rocketleague-stats-api-client.git"
+  },
+  "homepage": "https://github.com/JuandePL/rocketleague-stats-api-client",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

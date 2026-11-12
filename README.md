@@ -1,4 +1,4 @@
-# rocketleague-stats-api
+# rocketleague-stats-api-client
 
 Fully typed WebSocket client for the official [Rocket League Stats API](https://www.rocketleague.com/developer/stats-api), with runtime type guards for every event and command.
 
@@ -10,7 +10,7 @@ Fully typed WebSocket client for the official [Rocket League Stats API](https://
 ## Install
 
 ```sh
-npm install rocketleague-stats-api
+npm install rocketleague-stats-api-client
 ```
 
 ## Enable the Stats API in Rocket League
@@ -32,7 +32,7 @@ WebPort=49124
 ## Usage
 
 ```ts
-import { RocketLeagueStatsClient } from 'rocketleague-stats-api';
+import { RocketLeagueStatsClient } from "rocketleague-stats-api-client";
 
 const client = new RocketLeagueStatsClient(); // ws://127.0.0.1:49124, connects automatically
 
@@ -120,7 +120,7 @@ Errors are only reported to `error` listeners. A throwing listener doesn't stop 
 Every guard is exported, so you can validate messages from any source (the TCP port, recordings, a relay server…):
 
 ```ts
-import { isStatsApiEvent, isGoalScoredData, isEventData, isStatsApiCommand, parseEventMessage } from 'rocketleague-stats-api';
+import { isStatsApiEvent, isGoalScoredData, isEventData, isStatsApiCommand, parseEventMessage } from 'rocketleague-stats-api-client';
 
 isGoalScoredData(payload);                 // payload is GoalScoredData
 isEventData('BallHit', payload);           // payload is BallHitData
