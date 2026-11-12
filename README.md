@@ -29,6 +29,24 @@ WebPort=49124
 | `Port`           | `49123` | TCP port. `0` disables it.                                          |
 | `WebPort`        | `49124` | WebSocket port used by this library. `0` disables it.               |
 
+### Automatic setup (Node.js)
+
+Import the client from `rocketleague-stats-api-client/node` and it checks the `.ini` for you. It looks for `TAStatsAPI.ini` first, then `DefaultStatsAPI.ini`. On Windows it finds the Epic Games and Steam installs by itself. If `PacketSendRate` is `0` or less (or missing), it sets it to `30` and warns that **you must restart the game** for the Stats API to work. The game only reads this file at launch.
+
+```ts
+import { RocketLeagueStatsClient } from 'rocketleague-stats-api-client/node';
+
+const client = new RocketLeagueStatsClient({
+  ensureStatsApi: true, // default. Or false, or { installDir, iniPath, packetSendRate, warn }
+});
+
+const config = await client.statsApiConfig;
+// { status: 'updated', iniPath, previous: 0, packetSendRate: 30, restartRequired: true }
+// or 'enabled' | 'not-found' | 'write-failed' (e.g. no permission under Program Files)
+```
+
+You can also run the check on its own with `ensureStatsApiEnabled(options)`. Use `editPacketSendRate(content)` to edit the `.ini` text without touching the disk. The main entry stays free of Node APIs, so it still works in browsers.
+
 ## Usage
 
 ```ts
