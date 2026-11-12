@@ -78,7 +78,7 @@ export interface StatsApiClientOptions {
 	WebSocket?: WebSocketConstructor;
 	/**
 	 * **Node.js only** (ignored in browsers). Check the Stats API `.ini` file (`TAStatsAPI.ini`, else
-	 * `DefaultStatsAPI.ini`) on construction and, if `PacketSendRate` is `0` or less, set it to `30` and
+	 * `DefaultStatsAPI.ini`) on construction and, if `PacketSendRate` is `0` or less, missing, or above `120`, set it to `30` and
 	 * warn that the game must be restarted. Pass options to customize it, or `false` to disable it.
 	 * @default true
 	 */
@@ -207,8 +207,8 @@ export class RocketLeagueStatsClient {
 		if (ensureStatsApi !== false && isNodeRuntime()) {
 			const ensureOptions = ensureStatsApi === true ? {} : ensureStatsApi;
 			const rate = ensureOptions.packetSendRate;
-			if (rate !== undefined && !(Number.isFinite(rate) && rate > 0)) {
-				throw new RangeError(`packetSendRate must be greater than 0, got ${rate}.`);
+			if (rate !== undefined && !(Number.isFinite(rate) && rate > 0 && rate <= 120)) {
+				throw new RangeError(`packetSendRate must be between 1 and 120, got ${rate}.`);
 			}
 			// Loaded lazily so the Node-only code (node:fs) is never evaluated in browsers.
 			this.statsApiConfig = import('./node/config.js').then(({ ensureStatsApiEnabled }) => ensureStatsApiEnabled(ensureOptions));

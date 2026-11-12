@@ -31,7 +31,7 @@ WebPort=49124
 
 ### Automatic setup (Node.js)
 
-On Node.js the client checks the `.ini` for you. It looks for `TAStatsAPI.ini` first, then `DefaultStatsAPI.ini`. On Windows it finds the Epic Games and Steam installs by itself. If `PacketSendRate` is `0` or less (or missing), it sets it to `30` and warns that **you must restart the game** for the Stats API to work. The game only reads this file at launch. In browsers the check is skipped and the Node-only code is never loaded.
+On Node.js the client checks the `.ini` for you. It looks for `TAStatsAPI.ini` first, then `DefaultStatsAPI.ini`. On Windows it finds the Epic Games and Steam installs by itself. If `PacketSendRate` is `0` or less, missing, or above the maximum of `120`, it sets it to `30` and warns that **you must restart the game** for the Stats API to work. The game only reads this file at launch. In browsers the check is skipped and the Node-only code is never loaded.
 
 ```ts
 import { RocketLeagueStatsClient } from 'rocketleague-stats-api-client';
