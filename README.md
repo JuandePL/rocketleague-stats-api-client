@@ -10,7 +10,7 @@ Fully typed WebSocket client for the official [Rocket League Stats API](https://
 ## Install
 
 ```sh
-npm install rocketleague-stats-api-client
+npm install @juande_pl/rocketleague-stats-api-client
 ```
 
 ## Enable the Stats API in Rocket League
@@ -34,7 +34,7 @@ WebPort=49124
 On Node.js the client checks the `.ini` for you. It looks for `TAStatsAPI.ini` first, then `DefaultStatsAPI.ini`. On Windows it finds the Epic Games and Steam installs by itself. If `PacketSendRate` is `0` or less, missing, or above the maximum of `120`, it sets it to `30` and warns that **you must restart the game** for the Stats API to work. The game only reads this file at launch. In browsers the check is skipped and the Node-only code is never loaded.
 
 ```ts
-import { RocketLeagueStatsClient } from 'rocketleague-stats-api-client';
+import { RocketLeagueStatsClient } from '@juande_pl/rocketleague-stats-api-client';
 
 const client = new RocketLeagueStatsClient({
   ensureStatsApi: true, // default. Or false, or { installDir, iniPath, packetSendRate, warn }
@@ -45,12 +45,12 @@ const config = await client.statsApiConfig;
 // or 'enabled' | 'not-found' | 'write-failed' (e.g. no permission under Program Files)
 ```
 
-The helpers are exported from `rocketleague-stats-api-client/node`. Run the check on its own with `ensureStatsApiEnabled(options)`, or use `editPacketSendRate(content)` to edit the `.ini` text without touching the disk.
+The helpers are exported from `@juande_pl/rocketleague-stats-api-client/node`. Run the check on its own with `ensureStatsApiEnabled(options)`, or use `editPacketSendRate(content)` to edit the `.ini` text without touching the disk.
 
 ## Usage
 
 ```ts
-import { RocketLeagueStatsClient } from "rocketleague-stats-api-client";
+import { RocketLeagueStatsClient } from "@juande_pl/rocketleague-stats-api-client";
 
 const client = new RocketLeagueStatsClient(); // ws://127.0.0.1:49124, connects automatically
 
@@ -139,7 +139,7 @@ Errors are only reported to `error` listeners. A throwing listener doesn't stop 
 Every guard is exported, so you can validate messages from any source (the TCP port, recordings, a relay server…):
 
 ```ts
-import { isStatsApiEvent, isGoalScoredData, isEventData, isStatsApiCommand, parseEventMessage } from 'rocketleague-stats-api-client';
+import { isStatsApiEvent, isGoalScoredData, isEventData, isStatsApiCommand, parseEventMessage } from '@juande_pl/rocketleague-stats-api-client';
 
 isGoalScoredData(payload);                 // payload is GoalScoredData
 isEventData('BallHit', payload);           // payload is BallHitData

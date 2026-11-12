@@ -262,7 +262,7 @@ export async function ensureStatsApiEnabled(options: EnsureStatsApiOptions = {})
 		await writeFile(iniPath, edit.content, encoding);
 	} catch (error) {
 		warn(
-			`[rocketleague-stats-api-client] ${describeProblem(edit.previous)}, ` +
+			`[@juande_pl/rocketleague-stats-api-client] ${describeProblem(edit.previous)}, ` +
 				`but "${iniPath}" could not be written. Set PacketSendRate=${rate} manually (you may need administrator rights) ` +
 				'and restart the game.',
 		);
@@ -270,7 +270,7 @@ export async function ensureStatsApiEnabled(options: EnsureStatsApiOptions = {})
 	}
 
 	warn(
-		`[rocketleague-stats-api-client] ${describeProblem(edit.previous)}. ` +
+		`[@juande_pl/rocketleague-stats-api-client] ${describeProblem(edit.previous)}. ` +
 			`PacketSendRate has been set to ${rate} in "${iniPath}". Restart Rocket League for the Stats API to work.`,
 	);
 	return { status: 'updated', iniPath, previous: edit.previous, packetSendRate: rate, restartRequired: true };
