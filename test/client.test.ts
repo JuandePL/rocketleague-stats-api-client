@@ -53,7 +53,7 @@ class FakeWebSocket implements WebSocketLike {
 }
 
 function createClient(options: StatsApiClientOptions = {}) {
-	return new RocketLeagueStatsClient({ WebSocket: FakeWebSocket, ...options });
+	return new RocketLeagueStatsClient({ WebSocket: FakeWebSocket, ensureStatsApi: false, ...options });
 }
 
 beforeEach(() => {

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { editPacketSendRate, ensureStatsApiEnabled, RocketLeagueStatsClient } from '../src/node.js';
+import { RocketLeagueStatsClient as MainClient } from '../src/index.js';
 
 describe('editPacketSendRate', () => {
 	it('replaces 0 and keeps the rest of the file, comments and CRLF', () => {
@@ -96,5 +97,16 @@ describe('ensureStatsApiEnabled', () => {
 
 		await expect(client.statsApiConfig).resolves.toMatchObject({ status: 'updated', restartRequired: true });
 		expect(() => new RocketLeagueStatsClient({ autoConnect: false, ensureStatsApi: { packetSendRate: 0 } })).toThrow(RangeError);
+	});
+
+	it('is the same client in the main entry, and can be disabled', async () => {
+		const file = path.join(configDir, 'TAStatsAPI.ini');
+		await writeFile(file, '[TAGame.MatchStatsExporter_TA]\nPacketSendRate=0\n');
+
+		expect(MainClient).toBe(RocketLeagueStatsClient);
+		expect(new MainClient({ autoConnect: false, ensureStatsApi: false }).statsApiConfig).toBeUndefined();
+		await expect(
+			new MainClient({ autoConnect: false, ensureStatsApi: { installDir, warn: false } }).statsApiConfig,
+		).resolves.toMatchObject({ status: 'updated' });
 	});
 });
