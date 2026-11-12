@@ -9,5 +9,6 @@ export * from './guards/commands.js';
 export * from './parse.js';
 export * from './errors.js';
 export * from './client.js';
+export type { EnsureStatsApiOptions, EnsureStatsApiResult } from './node/config.js';
 
 export { RocketLeagueStatsClient as default } from './client.js';

@@ -21,6 +21,12 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "browser": {
+    "fs/promises": false,
+    "path": false,
+    "node:fs/promises": false,
+    "node:path": false
+  },
   "exports": {
     ".": {
       "import": {

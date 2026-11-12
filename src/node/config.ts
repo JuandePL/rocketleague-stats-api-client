@@ -4,8 +4,11 @@ import path from 'node:path';
 /** Section of the Stats API `.ini` file that holds the exporter settings. */
 export const STATS_API_SECTION = 'TAGame.MatchStatsExporter_TA';
 
-/** `PacketSendRate` written when the Stats API is disabled. */
+/** `PacketSendRate` written when the current value is invalid (`<= 0`, missing, or above the maximum). */
 export const DEFAULT_PACKET_SEND_RATE = 30;
+
+/** Highest `PacketSendRate` the game accepts. */
+export const MAX_PACKET_SEND_RATE = 120;
 
 /** `.ini` file names, in lookup order. `TAStatsAPI.ini` wins over `DefaultStatsAPI.ini`. */
 export const STATS_API_INI_FILES = ['TAStatsAPI.ini', 'DefaultStatsAPI.ini'] as const;
@@ -18,7 +21,7 @@ export interface EnsureStatsApiOptions {
 	installDir?: string;
 	/** Exact path of the `.ini` file to check. Overrides `installDir` and auto-detection. */
 	iniPath?: string;
-	/** `PacketSendRate` written when the current value is `0` or less. @default 30 */
+	/** `PacketSendRate` written when the current value is `0` or less, missing, or above `120`. Must be 1–120. @default 30 */
 	packetSendRate?: number;
 	/**
 	 * Called with a human-readable message when the file was changed (restart required) or could not be written.
@@ -31,9 +34,9 @@ export interface EnsureStatsApiOptions {
 export type EnsureStatsApiResult =
 	/** No Stats API `.ini` file was found. */
 	| { status: 'not-found'; searched: string[] }
-	/** `PacketSendRate` was already greater than 0. */
+	/** `PacketSendRate` was already between 1 and 120. */
 	| { status: 'enabled'; iniPath: string; packetSendRate: number }
-	/** `PacketSendRate` was `0` or less and has been set. The game must be restarted. */
+	/** `PacketSendRate` was `0` or less, missing, or above 120, and has been set. The game must be restarted. */
 	| { status: 'updated'; iniPath: string; previous: number | undefined; packetSendRate: number; restartRequired: true }
 	/** The file needed a change but could not be written (e.g. no permission under `Program Files`). */
 	| { status: 'write-failed'; iniPath: string; previous: number | undefined; error: unknown };
@@ -45,9 +48,9 @@ export type EnsureStatsApiResult =
 export interface PacketSendRateEdit {
 	/** Current value, or `undefined` if the key is missing (the game then uses `0`). */
 	previous: number | undefined;
-	/** `true` when the Stats API is disabled (`PacketSendRate` <= 0 or missing). */
-	disabled: boolean;
-	/** The file contents with `PacketSendRate` set to the requested rate. Equals the input when `disabled` is false. */
+	/** `true` when `PacketSendRate` is `0` or less, missing (Stats API disabled), or above {@link MAX_PACKET_SEND_RATE}. */
+	needsUpdate: boolean;
+	/** The file contents with `PacketSendRate` set to the requested rate. Equals the input when `needsUpdate` is false. */
 	content: string;
 }
 
@@ -89,8 +92,8 @@ export function editPacketSendRate(content: string, rate = DEFAULT_PACKET_SEND_R
 		}
 	}
 
-	const disabled = previous === undefined || previous <= 0;
-	if (!disabled) return { previous, disabled, content };
+	const needsUpdate = previous === undefined || previous <= 0 || previous > MAX_PACKET_SEND_RATE;
+	if (!needsUpdate) return { previous, needsUpdate, content };
 
 	if (keyLine !== -1) {
 		lines[keyLine] = lines[keyLine]!.replace(KEY_RE, (_, prefix: string, _value: string, suffix: string) => `${prefix}${rate}${suffix}`);
@@ -104,7 +107,7 @@ export function editPacketSendRate(content: string, rate = DEFAULT_PACKET_SEND_R
 		lines.push(`[${STATS_API_SECTION}]`, `PacketSendRate=${rate}`);
 		if (hasTrailingNewline) lines.push('');
 	}
-	return { previous, disabled, content: lines.join(eol) };
+	return { previous, needsUpdate, content: lines.join(eol) };
 }
 
 // ---------------------------------------------------------------------------
@@ -209,20 +212,29 @@ export async function findStatsApiIni(installDir?: string): Promise<{ iniPath: s
 	return { iniPath: undefined, searched };
 }
 
+/** Why `PacketSendRate` needs to be changed, for warnings. */
+function describeProblem(previous: number | undefined): string {
+	return previous !== undefined && previous > MAX_PACKET_SEND_RATE
+		? `PacketSendRate=${previous} is above the maximum of ${MAX_PACKET_SEND_RATE}`
+		: `The Rocket League Stats API is disabled (PacketSendRate=${previous ?? 0})`;
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
 /**
  * Looks for the Stats API `.ini` file (`TAStatsAPI.ini` or `DefaultStatsAPI.ini`). If `PacketSendRate`
- * is `0` or less, sets it to `30` (or `options.packetSendRate`) and warns that the game must be restarted,
+ * is `0` or less, missing, or above `120`, sets it to `30` (or `options.packetSendRate`) and warns that the game must be restarted,
  * since Rocket League only reads this file at launch.
  *
  * Never throws: every outcome is reported in the returned result.
  */
 export async function ensureStatsApiEnabled(options: EnsureStatsApiOptions = {}): Promise<EnsureStatsApiResult> {
 	const rate = options.packetSendRate ?? DEFAULT_PACKET_SEND_RATE;
-	if (!Number.isFinite(rate) || rate <= 0) throw new RangeError(`packetSendRate must be greater than 0, got ${rate}.`);
+	if (!Number.isFinite(rate) || rate <= 0 || rate > MAX_PACKET_SEND_RATE) {
+		throw new RangeError(`packetSendRate must be between 1 and ${MAX_PACKET_SEND_RATE}, got ${rate}.`);
+	}
 	const warn = options.warn === false ? () => {} : (options.warn ?? ((message: string) => console.warn(message)));
 
 	let iniPath = options.iniPath;
@@ -244,13 +256,13 @@ export async function ensureStatsApiEnabled(options: EnsureStatsApiOptions = {})
 	}
 
 	const edit = editPacketSendRate(content, rate);
-	if (!edit.disabled) return { status: 'enabled', iniPath, packetSendRate: edit.previous! };
+	if (!edit.needsUpdate) return { status: 'enabled', iniPath, packetSendRate: edit.previous! };
 
 	try {
 		await writeFile(iniPath, edit.content, encoding);
 	} catch (error) {
 		warn(
-			`[rocketleague-stats-api-client] The Rocket League Stats API is disabled (PacketSendRate=${edit.previous ?? 0}) ` +
+			`[rocketleague-stats-api-client] ${describeProblem(edit.previous)}, ` +
 				`but "${iniPath}" could not be written. Set PacketSendRate=${rate} manually (you may need administrator rights) ` +
 				'and restart the game.',
 		);
@@ -258,7 +270,7 @@ export async function ensureStatsApiEnabled(options: EnsureStatsApiOptions = {})
 	}
 
 	warn(
-		`[rocketleague-stats-api-client] The Rocket League Stats API was disabled (PacketSendRate=${edit.previous ?? 0}). ` +
+		`[rocketleague-stats-api-client] ${describeProblem(edit.previous)}. ` +
 			`PacketSendRate has been set to ${rate} in "${iniPath}". Restart Rocket League for the Stats API to work.`,
 	);
 	return { status: 'updated', iniPath, previous: edit.previous, packetSendRate: rate, restartRequired: true };

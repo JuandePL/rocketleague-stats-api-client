@@ -2,7 +2,7 @@
  * Run with: npx tsx examples/basic.ts
  * Requires Rocket League running with the Stats API enabled (see README).
  */
-import { RocketLeagueStatsClient } from '../src/node.js';
+import { RocketLeagueStatsClient } from '../src/index.js';
 
 // Connects to ws://127.0.0.1:49124 automatically and enables PacketSendRate in the .ini if needed.
 const client = new RocketLeagueStatsClient();

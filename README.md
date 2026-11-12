@@ -31,10 +31,10 @@ WebPort=49124
 
 ### Automatic setup (Node.js)
 
-Import the client from `rocketleague-stats-api-client/node` and it checks the `.ini` for you. It looks for `TAStatsAPI.ini` first, then `DefaultStatsAPI.ini`. On Windows it finds the Epic Games and Steam installs by itself. If `PacketSendRate` is `0` or less (or missing), it sets it to `30` and warns that **you must restart the game** for the Stats API to work. The game only reads this file at launch.
+On Node.js the client checks the `.ini` for you. It looks for `TAStatsAPI.ini` first, then `DefaultStatsAPI.ini`. On Windows it finds the Epic Games and Steam installs by itself. If `PacketSendRate` is `0` or less, missing, or above the maximum of `120`, it sets it to `30` and warns that **you must restart the game** for the Stats API to work. The game only reads this file at launch. In browsers the check is skipped and the Node-only code is never loaded.
 
 ```ts
-import { RocketLeagueStatsClient } from 'rocketleague-stats-api-client/node';
+import { RocketLeagueStatsClient } from 'rocketleague-stats-api-client';
 
 const client = new RocketLeagueStatsClient({
   ensureStatsApi: true, // default. Or false, or { installDir, iniPath, packetSendRate, warn }
@@ -45,7 +45,7 @@ const config = await client.statsApiConfig;
 // or 'enabled' | 'not-found' | 'write-failed' (e.g. no permission under Program Files)
 ```
 
-You can also run the check on its own with `ensureStatsApiEnabled(options)`. Use `editPacketSendRate(content)` to edit the `.ini` text without touching the disk. The main entry stays free of Node APIs, so it still works in browsers.
+The helpers are exported from `rocketleague-stats-api-client/node`. Run the check on its own with `ensureStatsApiEnabled(options)`, or use `editPacketSendRate(content)` to edit the `.ini` text without touching the disk.
 
 ## Usage
 
@@ -83,6 +83,7 @@ new RocketLeagueStatsClient({
   reconnect: true,       // or false, or { initialDelay, maxDelay, factor, maxAttempts }
   validateEvents: true,  // run type guards on incoming events
   WebSocket: undefined,  // custom implementation, defaults to globalThis.WebSocket
+  ensureStatsApi: true,  // Node.js only: enable PacketSendRate in the .ini (see above)
 });
 ```
 

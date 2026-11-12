@@ -4,6 +4,7 @@ import { isRecord } from './guards/primitives.js';
 import { parseEventMessage, type ParseFailure } from './parse.js';
 import type { CommandDataMap, CommandName, StatsApiCommand } from './types/commands.js';
 import type { EventDataMap, EventName, StatsApiEvent, StatsApiEventOf } from './types/events.js';
+import type { EnsureStatsApiOptions, EnsureStatsApiResult } from './node/config.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket abstraction
@@ -75,6 +76,19 @@ export interface StatsApiClientOptions {
 	 * (browsers, Node.js >= 22). Pass `WebSocket` from the `ws` package for older runtimes.
 	 */
 	WebSocket?: WebSocketConstructor;
+	/**
+	 * **Node.js only** (ignored in browsers). Check the Stats API `.ini` file (`TAStatsAPI.ini`, else
+	 * `DefaultStatsAPI.ini`) on construction and, if `PacketSendRate` is `0` or less, missing, or above `120`, set it to `30` and
+	 * warn that the game must be restarted. Pass options to customize it, or `false` to disable it.
+	 * @default true
+	 */
+	ensureStatsApi?: boolean | EnsureStatsApiOptions;
+}
+
+/** `true` when running on Node.js (where the `.ini` file can be read). */
+function isNodeRuntime(): boolean {
+	const proc = (globalThis as { process?: { versions?: { node?: unknown } } }).process;
+	return typeof proc?.versions?.node === 'string';
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +164,12 @@ export class RocketLeagueStatsClient {
 	/** The WebSocket URL this client connects to. */
 	readonly url: string;
 
+	/**
+	 * Result of the `.ini` check (see the `ensureStatsApi` option). `undefined` outside Node.js or when
+	 * `ensureStatsApi: false`. Never rejects.
+	 */
+	readonly statsApiConfig: Promise<EnsureStatsApiResult> | undefined;
+
 	readonly #autoConnect: boolean;
 	readonly #reconnect: Required<ReconnectOptions> | null;
 	readonly #validateEvents: boolean;
@@ -182,6 +202,19 @@ export class RocketLeagueStatsClient {
 						maxAttempts: Number.POSITIVE_INFINITY,
 						...(reconnect === true ? {} : reconnect),
 					};
+
+		const ensureStatsApi = options.ensureStatsApi ?? true;
+		if (ensureStatsApi !== false && isNodeRuntime()) {
+			const ensureOptions = ensureStatsApi === true ? {} : ensureStatsApi;
+			const rate = ensureOptions.packetSendRate;
+			if (rate !== undefined && !(Number.isFinite(rate) && rate > 0 && rate <= 120)) {
+				throw new RangeError(`packetSendRate must be between 1 and 120, got ${rate}.`);
+			}
+			// Loaded lazily so the Node-only code (node:fs) is never evaluated in browsers.
+			this.statsApiConfig = import('./node/config.js').then(({ ensureStatsApiEnabled }) => ensureStatsApiEnabled(ensureOptions));
+		} else {
+			this.statsApiConfig = undefined;
+		}
 
 		if (this.#autoConnect) {
 			queueMicrotask(() => {

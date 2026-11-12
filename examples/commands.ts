@@ -14,7 +14,7 @@ import {
 	type Focus,
 	type Perspective,
 	type StatsApiCommand,
-} from '../src/node.js';
+} from '../src/index.js';
 
 const HELP = `
 Commands:

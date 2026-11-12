@@ -3,12 +3,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { editPacketSendRate, ensureStatsApiEnabled, RocketLeagueStatsClient } from '../src/node.js';
+import { RocketLeagueStatsClient as MainClient } from '../src/index.js';
 
 describe('editPacketSendRate', () => {
 	it('replaces 0 and keeps the rest of the file, comments and CRLF', () => {
 		const ini = '[Other]\r\nPacketSendRate=0\r\n[TAGame.MatchStatsExporter_TA]\r\nPacketSendRate=0 ; disabled\r\nWebPort=49124\r\n';
 		const edit = editPacketSendRate(ini);
-		expect(edit).toMatchObject({ previous: 0, disabled: true });
+		expect(edit).toMatchObject({ previous: 0, needsUpdate: true });
 		expect(edit.content).toBe(
 			'[Other]\r\nPacketSendRate=0\r\n[TAGame.MatchStatsExporter_TA]\r\nPacketSendRate=30 ; disabled\r\nWebPort=49124\r\n',
 		);
@@ -16,18 +17,25 @@ describe('editPacketSendRate', () => {
 
 	it('replaces negative values', () => {
 		const edit = editPacketSendRate('[TAGame.MatchStatsExporter_TA]\nPacketSendRate = -5\n');
-		expect(edit).toMatchObject({ previous: -5, disabled: true });
+		expect(edit).toMatchObject({ previous: -5, needsUpdate: true });
 		expect(edit.content).toBe('[TAGame.MatchStatsExporter_TA]\nPacketSendRate = 30\n');
 	});
 
 	it('leaves enabled files untouched', () => {
 		const ini = '[TAGame.MatchStatsExporter_TA]\nPacketSendRate=60\n';
-		expect(editPacketSendRate(ini)).toEqual({ previous: 60, disabled: false, content: ini });
+		expect(editPacketSendRate(ini)).toEqual({ previous: 60, needsUpdate: false, content: ini });
+	});
+
+	it('replaces values above 120 and keeps 120', () => {
+		const edit = editPacketSendRate('[TAGame.MatchStatsExporter_TA]\nPacketSendRate=240\n');
+		expect(edit).toMatchObject({ previous: 240, needsUpdate: true });
+		expect(edit.content).toBe('[TAGame.MatchStatsExporter_TA]\nPacketSendRate=30\n');
+		expect(editPacketSendRate('[TAGame.MatchStatsExporter_TA]\nPacketSendRate=120\n').needsUpdate).toBe(false);
 	});
 
 	it('adds the key when missing from the section', () => {
 		const edit = editPacketSendRate('[TAGame.MatchStatsExporter_TA]\nWebPort=49124\n');
-		expect(edit).toMatchObject({ previous: undefined, disabled: true });
+		expect(edit).toMatchObject({ previous: undefined, needsUpdate: true });
 		expect(edit.content).toBe('[TAGame.MatchStatsExporter_TA]\nPacketSendRate=30\nWebPort=49124\n');
 	});
 
@@ -96,5 +104,17 @@ describe('ensureStatsApiEnabled', () => {
 
 		await expect(client.statsApiConfig).resolves.toMatchObject({ status: 'updated', restartRequired: true });
 		expect(() => new RocketLeagueStatsClient({ autoConnect: false, ensureStatsApi: { packetSendRate: 0 } })).toThrow(RangeError);
+		expect(() => new RocketLeagueStatsClient({ autoConnect: false, ensureStatsApi: { packetSendRate: 121 } })).toThrow(RangeError);
+	});
+
+	it('is the same client in the main entry, and can be disabled', async () => {
+		const file = path.join(configDir, 'TAStatsAPI.ini');
+		await writeFile(file, '[TAGame.MatchStatsExporter_TA]\nPacketSendRate=0\n');
+
+		expect(MainClient).toBe(RocketLeagueStatsClient);
+		expect(new MainClient({ autoConnect: false, ensureStatsApi: false }).statsApiConfig).toBeUndefined();
+		await expect(
+			new MainClient({ autoConnect: false, ensureStatsApi: { installDir, warn: false } }).statsApiConfig,
+		).resolves.toMatchObject({ status: 'updated' });
 	});
 });
