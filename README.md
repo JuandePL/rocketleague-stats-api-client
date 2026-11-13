@@ -82,6 +82,7 @@ new RocketLeagueStatsClient({
   autoConnect: true,     // set to false and call client.connect() yourself
   reconnect: true,       // or false, or { initialDelay, maxDelay, factor, maxAttempts }
   validateEvents: true,  // run type guards on incoming events
+  ignoreReplayEndGoal: true, // drop the fake GoalScored sent when a replay ends
   WebSocket: undefined,  // custom implementation, defaults to globalThis.WebSocket
   ensureStatsApi: true,  // Node.js only: enable PacketSendRate in the .ini (see above)
 });
@@ -162,6 +163,7 @@ The building blocks (`shape`, `optional`, `arrayOf`, `oneOf`, `isString`, `isNum
 - `StatfeedEvent.Type` is a localized label. Use `EventName` in your logic.
 - `GoalScored.GoalTime` is the length of the previous round, not the match clock.
 - In offline exhibitions or with splitscreen players, `StatfeedEvent` can arrive more than once.
+- When a replay ends, the game sends a fake `GoalScored` event whose `Scorer` is `{ "Name": "", "Shortcut": 0, "TeamNum": 0 }`. The client drops it by default. Pass `ignoreReplayEndGoal: false` to receive it, and use `isReplayEndGoal(event)` to detect it yourself.
 
 ## Development
 

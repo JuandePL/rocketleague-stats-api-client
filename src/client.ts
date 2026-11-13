@@ -72,6 +72,12 @@ export interface StatsApiClientOptions {
 	 */
 	validateEvents?: boolean;
 	/**
+	 * Drop the fake `GoalScored` event the game sends when a replay ends
+	 * (its `Scorer` is `{ Name: '', Shortcut: 0, TeamNum: 0 }`). See {@link isReplayEndGoal}.
+	 * @default true
+	 */
+	ignoreReplayEndGoal?: boolean;
+	/**
 	 * WebSocket implementation. Defaults to `globalThis.WebSocket`
 	 * (browsers, Node.js >= 22). Pass `WebSocket` from the `ws` package for older runtimes.
 	 */
@@ -83,6 +89,16 @@ export interface StatsApiClientOptions {
 	 * @default true
 	 */
 	ensureStatsApi?: boolean | EnsureStatsApiOptions;
+}
+
+/**
+ * `true` for the fake `GoalScored` event the game sends when a replay ends:
+ * its `Scorer` is `{ Name: '', Shortcut: 0, TeamNum: 0 }`.
+ */
+export function isReplayEndGoal(event: StatsApiEvent): boolean {
+	if (event.Event !== 'GoalScored') return false;
+	const { Name, Shortcut, TeamNum } = event.Data.Scorer;
+	return Name === '' && Shortcut === 0 && TeamNum === 0;
 }
 
 /** `true` when running on Node.js (where the `.ini` file can be read). */
@@ -173,6 +189,7 @@ export class RocketLeagueStatsClient {
 	readonly #autoConnect: boolean;
 	readonly #reconnect: Required<ReconnectOptions> | null;
 	readonly #validateEvents: boolean;
+	readonly #ignoreReplayEndGoal: boolean;
 	readonly #WebSocket: WebSocketConstructor | undefined;
 
 	#socket: WebSocketLike | null = null;
@@ -189,6 +206,7 @@ export class RocketLeagueStatsClient {
 		this.url = options.url ?? `${protocol}://${options.host ?? '127.0.0.1'}:${options.port ?? 49124}`;
 		this.#autoConnect = options.autoConnect ?? true;
 		this.#validateEvents = options.validateEvents ?? true;
+		this.#ignoreReplayEndGoal = options.ignoreReplayEndGoal ?? true;
 		this.#WebSocket = options.WebSocket ?? (globalThis as { WebSocket?: WebSocketConstructor }).WebSocket;
 
 		const reconnect = options.reconnect ?? true;
@@ -350,6 +368,7 @@ export class RocketLeagueStatsClient {
 			return;
 		}
 		const { event } = result;
+		if (this.#ignoreReplayEndGoal && isReplayEndGoal(event)) return;
 		// `event.Data` always matches `event.Event` (guaranteed by the parser), so dispatch untyped.
 		this.#dispatch(event.Event, [event.Data, event]);
 		for (const listener of [...this.#anyListeners]) {
