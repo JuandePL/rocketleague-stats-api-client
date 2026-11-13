@@ -195,6 +195,27 @@ describe('events', () => {
 		expect(onGoal).toHaveBeenCalledWith('PlayerA', 'PlayerC', 'GoalScored');
 	});
 
+	it('drops the fake GoalScored sent when a replay ends, unless disabled', () => {
+		const fake = wire('GoalScored', { ...fixtures.GoalScored, Scorer: { Name: '', Shortcut: 0, TeamNum: 0 } });
+
+		const { client, ws } = connected();
+		const onGoal = vi.fn();
+		const onAny = vi.fn();
+		client.on('GoalScored', onGoal);
+		client.onAny(onAny);
+		ws.message(fake);
+		expect(onGoal).not.toHaveBeenCalled();
+		expect(onAny).not.toHaveBeenCalled();
+		ws.message(wire('GoalScored', fixtures.GoalScored));
+		expect(onGoal).toHaveBeenCalledOnce();
+
+		const raw = connected({ ignoreReplayEndGoal: false });
+		const onRawGoal = vi.fn();
+		raw.client.on('GoalScored', onRawGoal);
+		raw.ws.message(fake);
+		expect(onRawGoal).toHaveBeenCalledOnce();
+	});
+
 	it('dispatches every event to onAny', () => {
 		const { client, ws } = connected();
 		const seen: StatsApiEvent[] = [];
