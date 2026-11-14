@@ -7,6 +7,7 @@ export * from './guards/events.js';
 export * from './guards/commands.js';
 
 export * from './parse.js';
+export * from './sort.js';
 export * from './errors.js';
 export * from './client.js';
 export type { EnsureStatsApiOptions, EnsureStatsApiResult } from './node/config.js';

@@ -83,6 +83,7 @@ new RocketLeagueStatsClient({
   reconnect: true,       // or false, or { initialDelay, maxDelay, factor, maxAttempts }
   validateEvents: true,  // run type guards on incoming events
   ignoreReplayEndGoal: true, // drop the fake GoalScored sent when a replay ends
+  sortPlayers: undefined, // sort UpdateState.Players (see below). Default: the game's order
   WebSocket: undefined,  // custom implementation, defaults to globalThis.WebSocket
   ensureStatsApi: true,  // Node.js only: enable PacketSendRate in the .ini (see above)
 });
@@ -134,6 +135,30 @@ Errors are only reported to `error` listeners. A throwing listener doesn't stop 
 | `SetMatchPaused`   | `{ bPaused: boolean }`                                          |
 
 `Perspective` is one of `'Fly' | 'SoftAttach' | 'HardAttach' | 'PlayerView' | 'AutoCam' | 'Camera_Director'`.
+
+## Sorting players
+
+By default `UpdateState.Players` arrives in the order the game sends it. To change that, pass `sortPlayers` to the client, or call `sortPlayers()` yourself on any player list:
+
+```ts
+import { RocketLeagueStatsClient, sortPlayers, byTeam, byStat, byName, byShortcut } from '@juande_pl/rocketleague-stats-api-client';
+
+// Every UpdateState: Blue then Orange, best score first within each team
+const client = new RocketLeagueStatsClient({ sortPlayers: [byTeam(), byStat('Score')] });
+
+// Or on demand. Returns a new array and doesn't change the original.
+const byBoost = sortPlayers(data.Players, byStat('Boost'));
+const custom = sortPlayers(data.Players, (a, b) => a.Demos - b.Demos);
+```
+
+| Comparator                    | Order                                                              |
+| ----------------------------- | ------------------------------------------------------------------ |
+| `byTeam(order = 'asc')`       | Blue (0) first. `'desc'` puts Orange first.                        |
+| `byShortcut(order = 'asc')`   | Spectator shortcut.                                                |
+| `byName(order = 'asc')`       | Name, case-insensitive.                                            |
+| `byStat(stat, order = 'desc')`| Any numeric field (`Score`, `Goals`, `Boost`…). Missing values go last. |
+
+The first comparator decides and the next ones break ties. The sort is stable, so players that compare equal keep the game's order.
 
 ## Type guards
 
