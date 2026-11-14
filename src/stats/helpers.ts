@@ -37,6 +37,12 @@ export function teamSide(teamNum: TeamNum): keyof TeamSplit | undefined {
 	return teamNum === Team.Blue ? 'blue' : teamNum === Team.Orange ? 'orange' : undefined;
 }
 
+/** Name of the team that plays as `teamNum`, from `Game.Teams`. Falls back to `Blue` / `Orange`. */
+export function teamName(teams: readonly { TeamNum: TeamNum; Name: string }[], teamNum: TeamNum): string {
+	const name = teams.find((team) => team.TeamNum === teamNum)?.Name;
+	return name || (teamNum === Team.Blue ? 'Blue' : teamNum === Team.Orange ? 'Orange' : `Team ${teamNum}`);
+}
+
 /** Converts a split into percentages (0–100) of its total. Both are `0` when the total is `0`. */
 export function toPercent(split: TeamSplit): TeamSplit {
 	const total = split.blue + split.orange;

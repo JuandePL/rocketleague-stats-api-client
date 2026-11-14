@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
 	EsportsSeries,
+	type EsportsSeriesOptions,
 	getMvp,
 	getTeamTotals,
 	getTopPlayer,
@@ -65,6 +66,18 @@ class Match {
 	/** The golden goal that ends overtime. */
 	goal() {
 		this.send(ev('GoalScored', { ...fixtures.GoalScored }));
+	}
+	/** `name` sends the ball against the crossbar of the goal at `y` (negative = blue goal). */
+	crossbar(name: string, y: number) {
+		const { Name, Shortcut, TeamNum } = this.players.find((p) => p.Name === name)!;
+		this.send(
+			ev('CrossbarHit', {
+				BallLocation: { X: 0, Y: y, Z: 640 },
+				BallSpeed: 1500,
+				ImpactForce: 800,
+				BallLastTouch: { Player: { Name, Shortcut, TeamNum }, Speed: 1500 },
+			}),
+		);
 	}
 	/** Ticks with the clock stopped (pause, goal replay, countdown). */
 	frozen(ticks: number) {
@@ -377,6 +390,103 @@ describe('MatchTracker', () => {
 		});
 	});
 
+	describe('air time', () => {
+		it('counts time with the car neither on the ground nor on a wall', () => {
+			const { tracker, match } = setup();
+			match.start();
+			const [ana, bob] = match.players as [Player, Player];
+			const air = (p: Player, inAir: boolean, onWall = false) => {
+				p.bOnGround = !inAir && !onWall;
+				p.bOnWall = onWall;
+			};
+
+			air(ana, true);
+			air(bob, false);
+			match.play(4); // Ana in the air
+			air(bob, false, true);
+			match.play(3); // Bob on the wall: not air time
+			ana.bDemolished = true;
+			match.play(2); // demolished: not air time
+			ana.bDemolished = false;
+			match.send(ev('MatchPaused'));
+			air(bob, true);
+			match.frozen(5); // paused: not counted
+			match.send(ev('MatchUnpaused'));
+			match.play(1); // both in the air
+
+			const stats = tracker.getStats();
+			const airTime = (name: string) => stats.players.find((p) => p.Name === name)?.airTime;
+			// 11 live ticks (start + 10 s) for 10 s of clock: ticks are converted with that ratio.
+			expect(airTime('Ana')).toBeCloseTo((8 / 11) * 10);
+			expect(airTime('Bob')).toBeCloseTo((1 / 11) * 10);
+		});
+	});
+
+	describe('crossbar hits', () => {
+		it('tells attack (opponent goal) from defense (own goal)', () => {
+			const { tracker, match } = setup();
+			match.start();
+			match.crossbar('Ana', 5100); // blue player, orange goal: attack
+			match.crossbar('Ana', 5100);
+			match.crossbar('Ana', -5100); // blue player, blue goal: defense
+			match.crossbar('Bob', -5100); // orange player, blue goal: attack
+			match.crossbar('Bob', 5100); // orange player, orange goal: defense
+
+			const crossbar = (name: string) => tracker.getStats().players.find((p) => p.Name === name)?.crossbar;
+			expect(crossbar('Ana')).toEqual({ attack: 2, defense: 1, total: 3 });
+			expect(crossbar('Bob')).toEqual({ attack: 1, defense: 1, total: 2 });
+		});
+
+		it('ignores hits during a pause or a goal replay', () => {
+			const { tracker, match } = setup();
+			match.start();
+			match.send(ev('MatchPaused'));
+			match.crossbar('Ana', 5100);
+			match.send(ev('MatchUnpaused'));
+			match.bReplay = true;
+			match.tick();
+			match.crossbar('Ana', 5100);
+			match.bReplay = false;
+			match.tick();
+			match.crossbar('Ana', 5100);
+			expect(tracker.getStats().players.find((p) => p.Name === 'Ana')?.crossbar.total).toBe(1);
+		});
+	});
+
+	it('gives the results of every player in the match summary', () => {
+		const { tracker, match } = setup();
+		const onEnd = vi.fn();
+		tracker.onMatchEnd(onEnd);
+		match.teams[0]!.Name = 'Team A';
+		match.players = [player('Ana', 0, { Score: 500, Goals: 2 }), player('Bob', 1, { Score: 700, Goals: 1 })];
+		match.start();
+		const ana = match.players[0]!;
+		ana.Boost = 100;
+		ana.bOnGround = false;
+		ana.bOnWall = false;
+		match.play(1);
+		ana.Boost = 70;
+		match.play(1);
+		match.crossbar('Ana', 5100);
+		match.end(0, [2, 1]);
+
+		const summary = onEnd.mock.calls[0]![0];
+		expect(summary.playerResults.map((p: { Name: string }) => p.Name)).toEqual(['Bob', 'Ana']); // sorted by score
+		expect(summary.playerResults[1]).toMatchObject({
+			Name: 'Ana',
+			team: 'Team A',
+			mvp: true,
+			Score: 500,
+			Goals: 2,
+			boostUsed: 30,
+			crossbar: { attack: 1, defense: 0, total: 1 },
+		});
+		expect(summary.playerResults[1].airTime).toBeGreaterThan(0);
+		expect(summary.playerResults[0]).toMatchObject({ Name: 'Bob', team: 'Orange', mvp: false });
+		expect(summary.mvp).toBe(summary.playerResults[1]);
+		expect(summary.scoreboard).toHaveLength(2);
+	});
+
 	it('attaches to a client through onAny', () => {
 		let listener: AnyEventListener | undefined;
 		const unsubscribe = vi.fn();
@@ -397,8 +507,8 @@ describe('MatchTracker', () => {
 });
 
 describe('EsportsSeries', () => {
-	function setup() {
-		const series = new EsportsSeries();
+	function setup(options: EsportsSeriesOptions = {}) {
+		const series = new EsportsSeries(undefined, options);
 		const match = new Match((event) => series.tracker.handle(event));
 		/** Plays a full match: `winner` holds possession and wins. */
 		const playMatch = (winner: 0 | 1, score: [number, number]) => {
@@ -436,8 +546,10 @@ describe('EsportsSeries', () => {
 		expect(result.teams[0].possessionPercent).toBeCloseTo(75, -1);
 		expect(result.teams[0].pressurePercent).toBeCloseTo(75, -1);
 
-		playMatch(1, [0, 1]); // after the end: not recorded
-		expect(series.matches).toHaveLength(4);
+		// With autoStart (default), the next match starts a new series.
+		playMatch(1, [0, 1]);
+		expect(series.status).toBe('running');
+		expect(series.matches).toHaveLength(1);
 	});
 
 	it('counts overtime wins like any other win', () => {
@@ -462,6 +574,96 @@ describe('EsportsSeries', () => {
 		expect(result.matches.map((m) => m.overtime)).toEqual([false, true, false]);
 		expect(result).toMatchObject({ finished: true, winner: 'Orange' });
 		expect(result.teams.find((t) => t.name === 'Orange')).toMatchObject({ wins: 2, goals: 5 });
+	});
+
+	describe('autoStart', () => {
+		it('records from the start without calling start(), as a best of 5 by default', () => {
+			const { series, playMatch } = setup();
+			expect(series.status).toBe('running');
+			expect(series.autoStart).toBe(true);
+			playMatch(0, [1, 0]);
+			expect(series.matches).toHaveLength(1);
+			expect(series.getResult().options).toEqual({ games: 5, format: 'best-of' });
+		});
+
+		it('starts a new series by itself after one finishes, keeping the old result until then', () => {
+			const { series, playMatch } = setup({ games: 3 });
+			const onStart = vi.fn();
+			const onEnd = vi.fn();
+			series.onSeriesStart(onStart);
+			series.onSeriesEnd(onEnd);
+
+			playMatch(1, [0, 1]);
+			playMatch(1, [0, 2]);
+			expect(series.status).toBe('finished');
+			expect(series.getResult()).toMatchObject({ winner: 'Orange', finished: true });
+
+			playMatch(0, [1, 0]); // first match of the next series
+			expect(onStart).toHaveBeenCalledWith({ games: 3, format: 'best-of' });
+			expect(series.status).toBe('running');
+			expect(series.matches).toHaveLength(1);
+			expect(series.getResult().teams[0]).toMatchObject({ name: 'Blue', wins: 1 });
+
+			playMatch(0, [1, 0]);
+			expect(onEnd).toHaveBeenCalledTimes(2);
+			expect(onEnd.mock.calls[1]![0]).toMatchObject({ winner: 'Blue' });
+		});
+
+		it('does not restart after stop() until start() or restart()', () => {
+			const { series, playMatch } = setup({ games: 1 });
+			series.stop();
+			playMatch(0, [1, 0]);
+			expect(series.matches).toHaveLength(0);
+
+			series.restart();
+			playMatch(0, [1, 0]);
+			expect(series.status).toBe('finished');
+			playMatch(1, [0, 1]); // the automatic restart is back on
+			expect(series.status).toBe('finished');
+			expect(series.getResult().winner).toBe('Orange');
+		});
+
+		it('records nothing after the end when disabled', () => {
+			const { series, playMatch } = setup({ autoStart: false });
+			expect(series.status).toBe('idle');
+			series.start({ games: 1 });
+			playMatch(0, [1, 0]);
+			playMatch(1, [0, 1]);
+			expect(series.matches).toHaveLength(1);
+			expect(series.getResult().winner).toBe('Blue');
+		});
+	});
+
+	it('keeps the player results of every match and sums them for the series', () => {
+		const { series, match } = setup({ games: 2, format: 'play-all' });
+		const playWithStats = (crossbarY: number) => {
+			match.players = [player('Ana', 0, { Score: 400, Goals: 1 }), player('Bob', 1, { Score: 300 })];
+			match.start();
+			match.players[0]!.bOnGround = false; // Ana always in the air
+			match.players[0]!.bOnWall = false;
+			match.hit(0, 1000);
+			match.play(10);
+			match.crossbar('Ana', crossbarY);
+			match.end(0, [1, 0]);
+		};
+		playWithStats(5100); // attack
+		playWithStats(-5100); // defense
+
+		const result = series.getResult();
+		expect(result.matches).toHaveLength(2);
+		for (const m of result.matches) {
+			expect(m.playerResults.map((p) => p.Name)).toEqual(['Ana', 'Bob']);
+			expect(m.playerResults[0]).toMatchObject({ mvp: true, Score: 400 });
+		}
+		expect(result.matches[0]!.playerResults[0]!.crossbar).toEqual({ attack: 1, defense: 0, total: 1 });
+		expect(result.matches[1]!.playerResults[0]!.crossbar).toEqual({ attack: 0, defense: 1, total: 1 });
+
+		const ana = result.players.find((p) => p.Name === 'Ana')!;
+		expect(ana).toMatchObject({ matches: 2, mvps: 2, Score: 800, Goals: 2, crossbar: { attack: 1, defense: 1, total: 2 } });
+		const airPerMatch = result.matches.map((m) => m.playerResults[0]!.airTime);
+		expect(ana.airTime).toBeCloseTo(airPerMatch[0]! + airPerMatch[1]!);
+		expect(ana.airTime).toBeGreaterThan(15);
+		expect(result.players.find((p) => p.Name === 'Bob')?.airTime).toBe(0);
 	});
 
 	it('plays every game with the play-all format', () => {
@@ -510,7 +712,8 @@ describe('EsportsSeries', () => {
 	});
 
 	it('rejects invalid game counts and ignores matches before start', () => {
-		const { series, playMatch } = setup();
+		expect(() => new EsportsSeries(undefined, { games: 0 })).toThrow(RangeError);
+		const { series, playMatch } = setup({ autoStart: false });
 		playMatch(0, [1, 0]);
 		expect(series.status).toBe('idle');
 		expect(series.matches).toHaveLength(0);
