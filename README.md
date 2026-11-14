@@ -160,6 +160,76 @@ const custom = sortPlayers(data.Players, (a, b) => a.Demos - b.Demos);
 
 The first comparator decides and the next ones break ties. The sort is stable, so players that compare equal keep the game's order.
 
+## Match stats and esports mode
+
+### Quick helpers
+
+These work on any player list, such as `UpdateState.Players`:
+
+```ts
+import { getMvp, getTopPlayer, getTeamTotals } from '@juande_pl/rocketleague-stats-api-client';
+
+getMvp(data.Players, winnerTeamNum);  // highest score on the winning team (ties: goals, assists, saves, shots)
+getTopPlayer(data.Players, 'Saves');  // player with the most saves
+getTeamTotals(data.Players);          // { blue: { Score, Goals, Shots, ... }, orange: { ... } }
+```
+
+### `MatchTracker`: possession, boost and field domination
+
+```ts
+import { MatchTracker } from '@juande_pl/rocketleague-stats-api-client';
+
+const tracker = new MatchTracker(client);
+const stats = tracker.getStats(); // any time during the match
+tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possession.percent));
+```
+
+| Stat                | How it is computed                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `possession`        | Time each team was the last to touch the ball (`Game.Ball.TeamNum`). In seconds and in percent.        |
+| `boost`             | Each tick, how much each player's boost went down, summed per player and per team. Pickups and demolitions don't count. |
+| `fieldDomination`   | Time the ball spent in each half. `pressure` credits the attacking team: ball 80% in the blue half = 80% pressure for orange. |
+
+Only time with the ball in play counts. Kickoff countdowns, pauses and goal replays are excluded. The tracker resets on its own when a new match starts. When the match ends, it gives you a `MatchSummary` with the final scoreboard, the winner and the MVP.
+
+> **Limitations:**
+> - `UpdateState` has no ball position, so field domination uses the location of the last `BallHit` until the next touch. If the ball crosses midfield without being touched, it is still counted in the half where it was last hit.
+> - `Boost` is a `SPECTATOR` field, so boost usage is only tracked while spectating.
+
+### `EsportsSeries`: esports mode
+
+Records a series of matches in memory and gives you the results.
+
+```ts
+import { EsportsSeries } from '@juande_pl/rocketleague-stats-api-client';
+
+const series = new EsportsSeries(client);
+series.onMatchEnd((match, result) => console.log(`Game ${result.matches.length}: MVP ${match.mvp?.Name}`));
+series.onSeriesEnd((result) => console.log(`${result.winner} wins the series. MVP: ${result.mvp?.Name}`));
+
+series.start({ games: 5 });                       // best of 5: ends when a team wins 3
+series.start({ games: 3, format: 'play-all' });   // plays all 3 matches
+series.stop();                                    // stops recording, keeps the results
+series.restart();                                 // same options, clears the stored matches
+series.getResult();                               // standings at any time (check `finished`)
+series.tracker.getStats();                        // live stats of the current match
+```
+
+| Method / property      | Description                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `start({ games, format })` | Starts a series. Clears any stored matches. `format`: `'best-of'` (default) or `'play-all'`. |
+| `restart()`            | Starts again with the same options. Clears the stored matches.                                |
+| `stop()`               | Stops recording. The matches played so far stay in `getResult()`.                             |
+| `getResult()`          | `{ status, finished, matches, teams, winner, players, mvp }`                                  |
+| `status`               | `'idle'`, `'running'`, `'finished'` or `'stopped'`.                                           |
+| `onMatchEnd` / `onSeriesEnd` | Listeners. Each returns an unsubscribe function.                                        |
+| `dispose()`            | Stops listening to the client.                                                                 |
+
+- **Teams are identified by name** (`Game.Teams[].Name`), so they can switch sides between matches. Give them distinct names in the private match settings.
+- **Per-team results** include wins, goals, boost used, possession and pressure over the whole series.
+- **Per-player results** include the summed scoreboard stats, boost used and the number of MVPs.
+- **Which matches count:** only matches that end (`MatchEnded`) while the series is running are recorded.
+
 ## Type guards
 
 Every guard is exported, so you can validate messages from any source (the TCP port, recordings, a relay server…):
