@@ -1,6 +1,6 @@
 {
   "name": "@juande_pl/rocketleague-stats-api-client",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Fully typed WebSocket client for the official Rocket League Stats API, with runtime type guards for every event and command.",
   "keywords": [
     "rocket-league",
