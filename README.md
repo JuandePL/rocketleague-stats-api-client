@@ -190,7 +190,7 @@ tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possessio
 | `boost`             | Each tick, how much each player's boost went down, summed per player and per team. Pickups and demolitions don't count. |
 | `fieldDomination`   | Time the ball spent in each half. `pressure` credits the attacking team: ball 80% in the blue half = 80% pressure for orange. |
 
-Only time with the ball in play counts. Kickoff countdowns, pauses and goal replays are excluded. The tracker resets on its own when a new match starts. When the match ends, it gives you a `MatchSummary` with the final scoreboard, the winner and the MVP.
+Only time with the ball in play counts. Kickoff countdowns and goal replays are excluded, and overtime is counted. **While the match is paused (`MatchPaused` until `MatchUnpaused`), everything is frozen:** time, possession, field domination and boost usage. Check `tracker.paused` to know if it is paused. The tracker resets on its own when a new match starts. When the match ends, it gives you a `MatchSummary` with the final scoreboard, the winner and the MVP.
 
 > **Limitations:**
 > - `UpdateState` has no ball position, so field domination uses the location of the last `BallHit` until the next touch. If the ball crosses midfield without being touched, it is still counted in the half where it was last hit.

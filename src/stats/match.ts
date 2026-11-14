@@ -19,7 +19,7 @@ export interface PlayerBoostUsage {
 	boostUsed: number;
 }
 
-/** Live stats of the current match. Times only count while the ball is in play. */
+/** Live stats of the current match. Times only count while the ball is in play and the match is not paused. */
 export interface MatchStats {
 	/** Seconds of play tracked (kickoff countdowns, goal replays and pauses excluded). */
 	secondsPlayed: number;
@@ -114,6 +114,14 @@ export class MatchTracker {
 		this.#detach = undefined;
 	}
 
+	/**
+	 * `true` between `MatchPaused` and `MatchUnpaused`. While paused, every stat is frozen:
+	 * time, possession, field domination and boost usage.
+	 */
+	get paused(): boolean {
+		return this.#paused;
+	}
+
 	/** `true` after `MatchEnded`, until the next match starts. */
 	get matchEnded(): boolean {
 		return this.#ended;
@@ -168,7 +176,7 @@ export class MatchTracker {
 				this.#paused = false;
 				break;
 			case 'BallHit':
-				if (!this.#lastGame?.bReplay) this.#ballHalf = event.Data.Ball.Location.Y < 0 ? 'blueHalf' : 'orangeHalf';
+				if (!this.#paused && !this.#lastGame?.bReplay) this.#ballHalf = event.Data.Ball.Location.Y < 0 ? 'blueHalf' : 'orangeHalf';
 				break;
 			case 'UpdateState':
 				if (!this.#ended) this.#tick(event.Data.Game, event.Data.Players, event.Data.MatchGuid);
@@ -185,13 +193,16 @@ export class MatchTracker {
 		this.#matchGuid = matchGuid ?? this.#matchGuid;
 		if (game.bReplay) return; // goal replays repeat old ticks
 
-		this.#trackBoost(players);
-
 		const clockStep = this.#lastClock === undefined ? 0 : Math.abs(game.TimeSeconds - this.#lastClock);
 		this.#lastClock = game.TimeSeconds;
+
+		// Paused: nothing is counted. Boost values are still recorded so nothing jumps on unpause.
+		this.#trackBoost(players, !this.#paused);
+		if (this.#paused) return;
+
 		// Joined mid-round (no RoundStarted seen yet): the clock moving means the ball is in play.
-		if (!this.#sawRoundStart && !this.#paused && clockStep > 0 && clockStep <= MAX_CLOCK_STEP) this.#roundActive = true;
-		if (!this.#roundActive || this.#paused) return;
+		if (!this.#sawRoundStart && clockStep > 0 && clockStep <= MAX_CLOCK_STEP) this.#roundActive = true;
+		if (!this.#roundActive) return;
 
 		this.#liveTicks++;
 		if (clockStep <= MAX_CLOCK_STEP) this.#secondsPlayed += clockStep;
@@ -200,7 +211,7 @@ export class MatchTracker {
 		if (this.#ballHalf) this.#halfTicks[this.#ballHalf]++;
 	}
 
-	#trackBoost(players: Player[]): void {
+	#trackBoost(players: Player[], count: boolean): void {
 		for (const player of players) {
 			if (typeof player.Boost !== 'number') continue;
 			const key = playerKey(player);
@@ -215,7 +226,7 @@ export class MatchTracker {
 			}
 			usage.TeamNum = player.TeamNum;
 			// A demolition empties the tank without using it.
-			if (previous && !demolished && !previous.demolished && player.Boost < previous.boost) {
+			if (count && previous && !demolished && !previous.demolished && player.Boost < previous.boost) {
 				usage.boostUsed += previous.boost - player.Boost;
 			}
 		}

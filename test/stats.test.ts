@@ -26,6 +26,8 @@ class Match {
 	clock = 300;
 	ballTeam = 255;
 	bReplay = false;
+	/** In overtime the clock counts up from 0 instead of down. */
+	overtime = false;
 	players: Player[] = [player('Ana', 0), player('Bob', 1)];
 	teams = [
 		{ ...baseGame.Teams[0]!, Name: 'Blue', TeamNum: 0, Score: 0 },
@@ -40,16 +42,29 @@ class Match {
 		this.send(
 			ev('UpdateState', {
 				Players: this.players,
-				Game: { ...baseGame, Teams: this.teams, TimeSeconds: this.clock, bReplay: this.bReplay, Ball: { Speed: 0, TeamNum: this.ballTeam } },
+				Game: { ...baseGame, Teams: this.teams, TimeSeconds: this.clock, bOvertime: this.overtime, bReplay: this.bReplay, Ball: { Speed: 0, TeamNum: this.ballTeam } },
 			}),
 		);
 	}
 	/** One second of play: one tick per second keeps the math simple. */
 	play(seconds: number) {
 		for (let i = 0; i < seconds; i++) {
-			this.clock--;
+			this.clock += this.overtime ? 1 : -1;
 			this.tick();
 		}
+	}
+	/** Regulation ended tied at 0:00: kickoff countdown, then the overtime round starts. */
+	startOvertime() {
+		this.clock = 0;
+		this.send(ev('CountdownBegin'));
+		this.frozen(3);
+		this.overtime = true;
+		this.send(ev('RoundStarted'));
+		this.ballTeam = 255;
+	}
+	/** The golden goal that ends overtime. */
+	goal() {
+		this.send(ev('GoalScored', { ...fixtures.GoalScored }));
 	}
 	/** Ticks with the clock stopped (pause, goal replay, countdown). */
 	frozen(ticks: number) {
@@ -60,6 +75,7 @@ class Match {
 		this.send(ev('BallHit', { Players: [], Ball: { PreHitSpeed: 0, PostHitSpeed: 0, Location: { X: 0, Y: y, Z: 0 } } }));
 	}
 	start() {
+		this.overtime = false;
 		this.send(ev('MatchInitialized'));
 		this.send(ev('RoundStarted'));
 		this.tick();
@@ -163,6 +179,90 @@ describe('MatchTracker', () => {
 		expect(stats.possession.percent).toEqual({ blue: 50, orange: 50 });
 	});
 
+	describe('pause', () => {
+		it('freezes time, possession and field domination', () => {
+			const { tracker, match } = setup();
+			match.start();
+			match.hit(0, 1000);
+			match.play(10);
+			const before = tracker.getStats();
+
+			match.send(ev('MatchPaused'));
+			expect(tracker.paused).toBe(true);
+			match.ballTeam = 1;
+			match.hit(1, -1000); // a hit reported during the pause is ignored
+			match.frozen(20);
+			expect(tracker.getStats()).toEqual(before);
+
+			match.send(ev('MatchUnpaused'));
+			expect(tracker.paused).toBe(false);
+			match.play(10);
+			const after = tracker.getStats();
+			expect(after.secondsPlayed).toBe(20);
+			// The ball is still counted in the orange half, where it was before the pause.
+			expect(after.fieldDomination.percent.orangeHalf).toBe(100);
+		});
+
+		it('freezes boost usage', () => {
+			const { tracker, match } = setup();
+			match.start();
+			const ana = match.players[0]!;
+			ana.Boost = 100;
+			match.play(1);
+			ana.Boost = 80;
+			match.play(1); // -20
+
+			match.send(ev('MatchPaused'));
+			ana.Boost = 50; // a drop during the pause is not counted
+			match.frozen(3);
+			match.send(ev('MatchUnpaused'));
+			ana.Boost = 40;
+			match.play(1); // -10 from the value seen during the pause
+
+			expect(tracker.getStats().boost.players.find((p) => p.Name === 'Ana')?.boostUsed).toBe(30);
+		});
+
+		it('does not start counting on a mid-round join while paused', () => {
+			const { tracker, match } = setup();
+			match.send(ev('MatchPaused'));
+			match.ballTeam = 0;
+			match.tick();
+			match.play(5);
+			expect(tracker.getStats().secondsPlayed).toBe(0);
+		});
+
+		it('pauses during overtime too', () => {
+			const { tracker, match } = setup();
+			match.clock = 5;
+			match.start();
+			match.play(5);
+			match.startOvertime();
+			match.hit(1, -1);
+			match.play(3);
+			match.send(ev('MatchPaused'));
+			match.frozen(10);
+			match.send(ev('MatchUnpaused'));
+			match.play(2);
+			expect(tracker.getStats().secondsPlayed).toBe(10);
+		});
+
+		it('pauses the clock in a series match without losing the match', () => {
+			const series = new EsportsSeries();
+			const match = new Match((event) => series.tracker.handle(event));
+			series.start({ games: 1 });
+			match.start();
+			match.hit(0, 1);
+			match.play(5);
+			match.send(ev('MatchPaused'));
+			match.frozen(30);
+			match.send(ev('MatchUnpaused'));
+			match.play(5);
+			match.end(0, [1, 0]);
+			expect(series.getResult()).toMatchObject({ finished: true, winner: 'Blue' });
+			expect(series.matches[0]?.secondsPlayed).toBe(10);
+		});
+	});
+
 	it('starts counting when joining mid-round', () => {
 		const { tracker, match } = setup();
 		match.ballTeam = 1;
@@ -215,6 +315,66 @@ describe('MatchTracker', () => {
 		match.start();
 		expect(tracker.matchEnded).toBe(false);
 		expect(tracker.getStats().secondsPlayed).toBe(0);
+	});
+
+	describe('overtime', () => {
+		/** 10 s of regulation with blue in control, then 5 s of overtime with orange in control. */
+		function playToOvertime(match: Match) {
+			match.clock = 10;
+			match.start();
+			match.hit(0, 1500); // blue attacks in the orange half
+			match.play(10);
+			expect(match.clock).toBe(0);
+			match.startOvertime();
+			match.hit(1, -1500); // orange attacks in the blue half
+			match.play(5);
+		}
+
+		it('keeps counting while the overtime clock counts up', () => {
+			const { tracker, match } = setup();
+			playToOvertime(match);
+
+			const stats = tracker.getStats();
+			expect(match.clock).toBe(5);
+			expect(stats.secondsPlayed).toBe(15);
+			expect(stats.possession.seconds.blue / stats.possession.seconds.orange).toBeCloseTo(2);
+			expect(stats.fieldDomination.pressure.blue / stats.fieldDomination.pressure.orange).toBeCloseTo(2);
+		});
+
+		it('does not count the countdown before overtime', () => {
+			const { tracker, match } = setup();
+			match.clock = 10;
+			match.start();
+			match.hit(0, 1);
+			match.play(10);
+			const regulation = tracker.getStats().secondsPlayed;
+			match.startOvertime();
+			match.frozen(10); // still in the countdown
+			expect(tracker.getStats().secondsPlayed).toBe(regulation);
+		});
+
+		it('marks the summary as overtime and credits the golden goal winner', () => {
+			const { tracker, match } = setup();
+			const onEnd = vi.fn();
+			tracker.onMatchEnd(onEnd);
+			match.players = [player('Ana', 0, { Score: 300 }), player('Bob', 1, { Score: 250 })];
+			playToOvertime(match);
+			match.goal();
+			match.end(1, [1, 2]);
+
+			const summary = onEnd.mock.calls[0]![0];
+			expect(summary).toMatchObject({ overtime: true, winnerTeamNum: 1, secondsPlayed: 15, mvp: { Name: 'Bob' } });
+		});
+
+		it('reports overtime as false for a match decided in regulation', () => {
+			const { tracker, match } = setup();
+			const onEnd = vi.fn();
+			tracker.onMatchEnd(onEnd);
+			match.start();
+			match.play(5);
+			match.end(0, [1, 0]);
+			expect(onEnd.mock.calls[0]![0].overtime).toBe(false);
+		});
 	});
 
 	it('attaches to a client through onAny', () => {
@@ -278,6 +438,30 @@ describe('EsportsSeries', () => {
 
 		playMatch(1, [0, 1]); // after the end: not recorded
 		expect(series.matches).toHaveLength(4);
+	});
+
+	it('counts overtime wins like any other win', () => {
+		const { series, match, playMatch } = setup();
+		series.start({ games: 3 });
+		playMatch(0, [2, 1]);
+
+		match.players = [player('Ana', 0, { Score: 200 }), player('Bob', 1, { Score: 350 })];
+		match.clock = 10;
+		match.start();
+		match.play(10);
+		match.startOvertime();
+		match.hit(1, -1000);
+		match.play(7);
+		match.goal();
+		match.end(1, [2, 3]);
+
+		expect(series.status).toBe('running');
+		playMatch(1, [0, 1]);
+
+		const result = series.getResult();
+		expect(result.matches.map((m) => m.overtime)).toEqual([false, true, false]);
+		expect(result).toMatchObject({ finished: true, winner: 'Orange' });
+		expect(result.teams.find((t) => t.name === 'Orange')).toMatchObject({ wins: 2, goals: 5 });
 	});
 
 	it('plays every game with the play-all format', () => {
