@@ -36,6 +36,8 @@ export interface TrackedPlayerStats extends PlayerBoostUsage {
 	 * 3 or more wheels down, so driving on 2 wheels counts as air time.
 	 */
 	airTime: number;
+	/** Seconds driving on a wall (`SPECTATOR` `bOnWall`), with a car that isn't demolished. */
+	onWallTime: number;
 	crossbar: CrossbarHits;
 }
 
@@ -110,11 +112,17 @@ interface PlayerAccumulator {
 	TeamNum: TeamNum;
 	boostUsed: number;
 	airTicks: number;
+	wallTicks: number;
 	crossbar: CrossbarHits;
 	lastBoost: { boost: number; demolished: boolean } | undefined;
 }
 
 /** `true` when the car is airborne (only known while spectating). */
+/** `true` when the car is driving on a wall (only known while spectating). */
+function isOnWall(player: Player): boolean {
+	return player.bHasCar !== false && player.bDemolished !== true && player.bOnWall === true;
+}
+
 function isInAir(player: Player): boolean {
 	return player.bHasCar !== false && player.bDemolished !== true && player.bOnGround === false && player.bOnWall === false;
 }
@@ -172,7 +180,7 @@ export class MatchTracker {
 
 	/**
 	 * `true` between `MatchPaused` and `MatchUnpaused`. While paused, every stat is frozen:
-	 * time, possession, field domination, boost usage, air time and crossbar hits.
+	 * time, possession, field domination, boost usage, air time, wall time and crossbar hits.
 	 */
 	get paused(): boolean {
 		return this.#paused;
@@ -261,6 +269,7 @@ export class MatchTracker {
 				TeamNum: player.TeamNum,
 				boostUsed: 0,
 				airTicks: 0,
+				wallTicks: 0,
 				crossbar: { attack: 0, defense: 0, total: 0 },
 				lastBoost: undefined,
 			};
@@ -306,7 +315,10 @@ export class MatchTracker {
 		const side = teamSide(game.Ball.TeamNum);
 		if (side) this.#possessionTicks[side]++;
 		if (this.#ballHalf) this.#halfTicks[this.#ballHalf]++;
-		for (const [player, entry] of entries) if (isInAir(player)) entry.airTicks++;
+		for (const [player, entry] of entries) {
+			if (isInAir(player)) entry.airTicks++;
+			else if (isOnWall(player)) entry.wallTicks++;
+		}
 	}
 
 	#trackBoost(player: Player, entry: PlayerAccumulator, count: boolean): void {
@@ -334,6 +346,7 @@ export class MatchTracker {
 			TeamNum: entry.TeamNum,
 			boostUsed: entry.boostUsed,
 			airTime: seconds(entry.airTicks),
+			onWallTime: seconds(entry.wallTicks),
 			crossbar: { ...entry.crossbar },
 		}));
 		const boostTeams: TeamSplit = { blue: 0, orange: 0 };
@@ -397,6 +410,7 @@ export class MatchTracker {
 					Demos: 0,
 					boostUsed: own?.boostUsed ?? 0,
 					airTime: own?.airTime ?? 0,
+					onWallTime: own?.onWallTime ?? 0,
 					crossbar: own ? { ...own.crossbar } : { attack: 0, defense: 0, total: 0 },
 				};
 				for (const stat of TOTAL_STATS) result[stat] = player[stat] ?? 0;

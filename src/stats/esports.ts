@@ -64,6 +64,8 @@ export interface SeriesPlayerResult {
 	boostUsed: number;
 	/** Seconds in the air (see `TrackedPlayerStats.airTime`). */
 	airTime: number;
+	/** Seconds driving on a wall (see `TrackedPlayerStats.onWallTime`). */
+	onWallTime: number;
 	/** Crossbar and post hits on the opponent's goal (`attack`) and on the player's own goal (`defense`). */
 	crossbar: CrossbarHits;
 }
@@ -267,6 +269,7 @@ export class EsportsSeries {
 						Demos: 0,
 						boostUsed: 0,
 						airTime: 0,
+						onWallTime: 0,
 						crossbar: { attack: 0, defense: 0, total: 0 },
 					};
 					players.set(result.key, total);
@@ -277,6 +280,7 @@ export class EsportsSeries {
 				for (const stat of TOTAL_STATS) total[stat] += result[stat];
 				total.boostUsed += result.boostUsed;
 				total.airTime += result.airTime;
+				total.onWallTime += result.onWallTime;
 				total.crossbar.attack += result.crossbar.attack;
 				total.crossbar.defense += result.crossbar.defense;
 				total.crossbar.total += result.crossbar.total;

@@ -48,7 +48,7 @@ function printPlayer(player: MatchPlayerResult | SeriesPlayerResult, extra = '')
 	console.log(
 		`    ${player.Name.padEnd(16)} ${player.team.padEnd(10)} ` +
 			`${String(player.Score).padStart(4)} pts  G ${player.Goals}  A ${player.Assists}  Sv ${player.Saves}  Sh ${player.Shots}  ` +
-			`boost ${player.boostUsed.toFixed(0)}  air ${secs(player.airTime)}  posts ${attack} att / ${defense} def${extra}`,
+			`boost ${player.boostUsed.toFixed(0)}  air ${secs(player.airTime)}  wall ${secs(player.onWallTime)}  posts ${attack} att / ${defense} def${extra}`,
 	);
 }
 

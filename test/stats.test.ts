@@ -419,6 +419,38 @@ describe('MatchTracker', () => {
 			// 11 live ticks (start + 10 s) for 10 s of clock: ticks are converted with that ratio.
 			expect(airTime('Ana')).toBeCloseTo((8 / 11) * 10);
 			expect(airTime('Bob')).toBeCloseTo((1 / 11) * 10);
+
+			// Bob drove on the wall for 5 ticks (3 + 2 while Ana was demolished). The pause doesn't count.
+			const wallTime = (name: string) => stats.players.find((p) => p.Name === name)?.onWallTime;
+			expect(wallTime('Bob')).toBeCloseTo((5 / 11) * 10);
+			expect(wallTime('Ana')).toBe(0);
+		});
+
+		it('does not count wall time while demolished, and sums it in the match and series results', () => {
+			const series = new EsportsSeries(undefined, { games: 2, format: 'play-all' });
+			const match = new Match((event) => series.tracker.handle(event));
+			const playOnWall = (wallSeconds: number) => {
+				match.players = [player('Ana', 0, { Score: 100 }), player('Bob', 1, { Score: 50 })];
+				match.start();
+				const ana = match.players[0]!;
+				ana.bOnGround = false;
+				ana.bOnWall = true;
+				match.play(wallSeconds);
+				ana.bDemolished = true; // still flagged on the wall, but demolished
+				match.play(2);
+				match.end(0, [1, 0]);
+			};
+			playOnWall(4);
+			playOnWall(6);
+
+			const [first, second] = series.matches;
+			const anaIn = (m: typeof first) => m!.playerResults.find((p) => p.Name === 'Ana')!;
+			// Each match: 1 start tick + wall ticks + 2 demolished ticks + 1 end tick, for the measured seconds.
+			expect(anaIn(first).onWallTime).toBeCloseTo((4 / 8) * 6);
+			expect(anaIn(second).onWallTime).toBeCloseTo((6 / 10) * 8);
+			expect(anaIn(first).airTime).toBe(0);
+			const total = series.getResult().players.find((p) => p.Name === 'Ana')!;
+			expect(total.onWallTime).toBeCloseTo(anaIn(first).onWallTime + anaIn(second).onWallTime);
 		});
 	});
 
