@@ -4,6 +4,7 @@ import { isRecord } from './guards/primitives.js';
 import { parseEventMessage, type ParseFailure } from './parse.js';
 import type { CommandDataMap, CommandName, StatsApiCommand } from './types/commands.js';
 import type { EventDataMap, EventName, StatsApiEvent, StatsApiEventOf } from './types/events.js';
+import { sortPlayers, type PlayerComparator } from './sort.js';
 import type { EnsureStatsApiOptions, EnsureStatsApiResult } from './node/config.js';
 
 // ---------------------------------------------------------------------------
@@ -77,6 +78,11 @@ export interface StatsApiClientOptions {
 	 * @default true
 	 */
 	ignoreReplayEndGoal?: boolean;
+	/**
+	 * Sort `UpdateState.Players` before listeners receive it. Pass one comparator, or several to break ties
+	 * (e.g. `[byTeam(), byStat('Score')]`). When omitted, players keep the order sent by the game.
+	 */
+	sortPlayers?: PlayerComparator | PlayerComparator[];
 	/**
 	 * WebSocket implementation. Defaults to `globalThis.WebSocket`
 	 * (browsers, Node.js >= 22). Pass `WebSocket` from the `ws` package for older runtimes.
@@ -190,6 +196,7 @@ export class RocketLeagueStatsClient {
 	readonly #reconnect: Required<ReconnectOptions> | null;
 	readonly #validateEvents: boolean;
 	readonly #ignoreReplayEndGoal: boolean;
+	readonly #playerComparators: PlayerComparator[];
 	readonly #WebSocket: WebSocketConstructor | undefined;
 
 	#socket: WebSocketLike | null = null;
@@ -207,6 +214,7 @@ export class RocketLeagueStatsClient {
 		this.#autoConnect = options.autoConnect ?? true;
 		this.#validateEvents = options.validateEvents ?? true;
 		this.#ignoreReplayEndGoal = options.ignoreReplayEndGoal ?? true;
+		this.#playerComparators = options.sortPlayers === undefined ? [] : [options.sortPlayers].flat();
 		this.#WebSocket = options.WebSocket ?? (globalThis as { WebSocket?: WebSocketConstructor }).WebSocket;
 
 		const reconnect = options.reconnect ?? true;
@@ -369,6 +377,9 @@ export class RocketLeagueStatsClient {
 		}
 		const { event } = result;
 		if (this.#ignoreReplayEndGoal && isReplayEndGoal(event)) return;
+		if (this.#playerComparators.length > 0 && event.Event === 'UpdateState' && Array.isArray(event.Data.Players)) {
+			event.Data.Players = sortPlayers(event.Data.Players, ...this.#playerComparators);
+		}
 		// `event.Data` always matches `event.Event` (guaranteed by the parser), so dispatch untyped.
 		this.#dispatch(event.Event, [event.Data, event]);
 		for (const listener of [...this.#anyListeners]) {
