@@ -57,7 +57,9 @@ function printPlayer(player: MatchPlayerResult | SeriesPlayerResult, extra = '')
 /** Games, MVPs, matches left early and platform id of a player over the series. */
 function seriesExtra(player: SeriesPlayerResult): string {
 	const left = player.leftEarly > 0 ? `, left ${player.leftEarly} early` : '';
-	return `  ${player.matches} games, ${player.mvps} MVPs${left}  [${player.PrimaryId || 'no id'}]`;
+	const id = player.bot ? 'bot' : player.PrimaryId;
+	const aka = player.names.length > 1 ? `, also ${player.names.filter((name) => name !== player.Name).join(', ')}` : '';
+	return `  ${player.matches} games, ${player.mvps} MVPs${left}  [${id}${aka}]`;
 }
 
 const options = parseArgs(process.argv.slice(2));

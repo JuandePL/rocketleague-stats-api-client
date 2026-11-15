@@ -7,7 +7,10 @@ import {
 	getMvp,
 	getTeamTotals,
 	getTopPlayer,
+	isBot,
+	isBotPrimaryId,
 	MatchTracker,
+	playerKey,
 	timeBetween,
 	timeFromPlayerLeftTo,
 	timeFromPlayerLeftToMatchEnd,
@@ -662,7 +665,7 @@ describe('MatchTracker', () => {
 				match.players = match.players.filter((p) => p !== cid);
 				match.play(2);
 				match.end(0, [0, 0]);
-				expect(timeFromPlayerLeftToNextGoal(onEnd.mock.calls[0]![0], 'Steam|Cid|0:Cid')).toBeUndefined();
+				expect(timeFromPlayerLeftToNextGoal(onEnd.mock.calls[0]![0], 'Steam|Cid|0')).toBeUndefined();
 			});
 
 			it('adds regulation time and overtime on the clock', () => {
@@ -681,7 +684,7 @@ describe('MatchTracker', () => {
 				match.goal();
 				match.end(0, [1, 0]);
 				const summary: MatchSummary = onEnd.mock.calls[0]![0];
-				expect(timeFromPlayerLeftToNextGoal(summary, 'Steam|Cid|0:Cid')).toMatchObject({ clockSeconds: 15, secondsPlayed: 15 });
+				expect(timeFromPlayerLeftToNextGoal(summary, 'Steam|Cid|0')).toMatchObject({ clockSeconds: 15, secondsPlayed: 15 });
 				expect(summary.endMoment).toMatchObject({ clock: '+00:10', overtime: true });
 			});
 
@@ -980,6 +983,88 @@ describe('EsportsSeries', () => {
 		series.start({ games: 1 });
 		playMatch(1, [0, 1]);
 		expect(series.getResult()).toMatchObject({ finished: true, winner: 'Orange' });
+	});
+
+	describe('player identity', () => {
+		const bot = (Name: string, TeamNum: 0 | 1, extra: Partial<Player> = {}) => player(Name, TeamNum, { PrimaryId: 'Unknown|0|0', ...extra });
+
+		it('uses the PrimaryId for real accounts and the name for bots', () => {
+			expect(playerKey({ Name: 'Ana', Shortcut: 1, TeamNum: 0, PrimaryId: 'Steam|765|0' })).toBe('Steam|765|0');
+			expect(playerKey({ Name: 'Ana', Shortcut: 1, TeamNum: 0, PrimaryId: 'Steam|765|1' })).toBe('Steam|765|1'); // splitscreen
+			expect(playerKey({ Name: 'Armstrong', Shortcut: 1, TeamNum: 0, PrimaryId: 'Unknown|0|0' })).toBe('bot:Armstrong');
+			expect(playerKey({ Name: 'Ana', Shortcut: 1, TeamNum: 0 })).toBe('bot:Ana'); // no PrimaryId
+			expect(isBotPrimaryId('Unknown|0|0')).toBe(true);
+			expect(isBotPrimaryId('Epic|0|0')).toBe(true);
+			expect(isBotPrimaryId('')).toBe(true);
+			expect(isBotPrimaryId('Epic|abc|0')).toBe(false);
+			expect(isBot({ PrimaryId: 'Steam|765|0' })).toBe(false);
+		});
+
+		it('keeps a player who changes their name between matches as one player', () => {
+			const { series, match } = setup({ games: 2, format: 'play-all' });
+			const playAs = (name: string) => {
+				match.players = [player(name, 0, { PrimaryId: 'Steam|765|0', Score: 100 }), bot('Armstrong', 1)];
+				match.start();
+				match.play(3);
+				match.end(0, [1, 0]);
+			};
+			playAs('Ana');
+			playAs('AnaPro');
+
+			const players = series.getResult().players.filter((p) => !p.bot);
+			expect(players).toHaveLength(1);
+			expect(players[0]).toMatchObject({ key: 'Steam|765|0', Name: 'AnaPro', names: ['Ana', 'AnaPro'], matches: 2, Score: 200 });
+		});
+
+		it('keeps bots apart by name, all sharing Unknown|0|0', () => {
+			const { series, match } = setup({ games: 1 });
+			match.players = [bot('Armstrong', 0, { Score: 50 }), bot('Bandit', 0, { Score: 70 }), bot('Casper', 1)];
+			match.start();
+			match.play(3);
+			match.end(0, [1, 0]);
+
+			const players = series.getResult().players;
+			expect(players.map((p) => p.key).sort()).toEqual(['bot:Armstrong', 'bot:Bandit', 'bot:Casper']);
+			expect(players.every((p) => p.bot && p.PrimaryId === 'Unknown|0|0')).toBe(true);
+			expect(series.matches[0]!.mvp).toMatchObject({ Name: 'Bandit', bot: true });
+		});
+
+		it('counts crossbar hits on the right player after a name change in the same match', () => {
+			const { series, match } = setup();
+			const { tracker } = series;
+			const ana = player('Ana', 0, { PrimaryId: 'Steam|765|0' });
+			match.players = [ana, bot('Armstrong', 1)];
+			match.start();
+			match.play(1);
+			ana.Name = 'AnaPro';
+			match.play(1);
+			match.crossbar('AnaPro', 5100);
+			const stats = tracker.getStats().players.filter((p) => !p.bot);
+			expect(stats).toHaveLength(1);
+			expect(stats[0]).toMatchObject({ key: 'Steam|765|0', Name: 'AnaPro', crossbar: { attack: 1 } });
+		});
+
+		it('accepts a custom identifyPlayer to merge accounts', () => {
+			// The same person on Steam and on Epic.
+			const aliases: Record<string, string> = { 'Steam|765|0': 'ana', 'Epic|abc|0': 'ana' };
+			const { series, match } = setup({
+				games: 2,
+				format: 'play-all',
+				identifyPlayer: (p) => (p.PrimaryId && aliases[p.PrimaryId]) || playerKey(p),
+			});
+			const playWith = (primaryId: string) => {
+				match.players = [player('Ana', 0, { PrimaryId: primaryId, Score: 100 }), bot('Armstrong', 1)];
+				match.start();
+				match.play(3);
+				match.end(0, [1, 0]);
+			};
+			playWith('Steam|765|0');
+			playWith('Epic|abc|0');
+
+			const ana = series.getResult().players.find((p) => p.key === 'ana');
+			expect(ana).toMatchObject({ matches: 2, Score: 200, PrimaryId: 'Epic|abc|0' });
+			expect(series.tracker.keyOf({ Name: 'Ana', Shortcut: 1, TeamNum: 0, PrimaryId: 'Steam|765|0' })).toBe('ana');
+		});
 	});
 
 	it('rejects invalid game counts and ignores matches before start', () => {

@@ -1,7 +1,18 @@
 import type { AnyEventListener, Unsubscribe } from '../client.js';
 import type { Game, GameTeam, Player, PlayerRef, TeamNum } from '../types/common.js';
 import type { EventName, GoalScoredData, StatsApiEvent, StatsApiEventOf } from '../types/events.js';
-import { getMvp, playerKey, teamName, teamSide, toPercent, TOTAL_STATS, type TeamSplit } from './helpers.js';
+import {
+	getMvp,
+	isBot,
+	playerKey,
+	teamName,
+	teamSide,
+	toPercent,
+	TOTAL_STATS,
+	type IdentifiablePlayer,
+	type PlayerIdentifier,
+	type TeamSplit,
+} from './helpers.js';
 
 /** Anything that delivers every game event, such as `RocketLeagueStatsClient`. */
 export interface StatsEventSource {
@@ -10,10 +21,13 @@ export interface StatsEventSource {
 
 /** Boost used by one player. */
 export interface PlayerBoostUsage {
-	/** See {@link playerKey}. */
+	/** Identifies the player across ticks and matches. See {@link playerKey} and the `identifyPlayer` option. */
 	key: string;
-	/** Platform id in the format `Platform|Uid|Splitscreen` (e.g. `"Steam|123|0"`). Empty if never seen in `UpdateState`. */
+	/** Platform id in the format `Platform|Uid|Splitscreen` (e.g. `"Steam|123|0"`). Bots have `"Unknown|0|0"`. */
 	PrimaryId: string;
+	/** `true` for bots. */
+	bot: boolean;
+	/** Latest name seen. */
 	Name: string;
 	Shortcut: number;
 	TeamNum: TeamNum;
@@ -158,6 +172,7 @@ const MAX_CLOCK_STEP = 5;
 interface PlayerAccumulator {
 	key: string;
 	PrimaryId: string;
+	bot: boolean;
 	Name: string;
 	Shortcut: number;
 	TeamNum: TeamNum;
@@ -170,6 +185,15 @@ interface PlayerAccumulator {
 	lastSeen: Player | undefined;
 	/** When `lastSeen` was recorded. */
 	lastSeenAt: MatchMoment | undefined;
+}
+
+export interface MatchTrackerOptions {
+	/**
+	 * How to identify a player across ticks and matches. Defaults to {@link playerKey}: the `PrimaryId`
+	 * for real accounts, `"bot:" + name` for bots. Use it to merge accounts or use your own ids.
+	 * Players from events other than `UpdateState` may come without `PrimaryId`.
+	 */
+	identifyPlayer?: PlayerIdentifier;
 }
 
 /** `true` when the car is driving on a wall (only known while spectating). */
@@ -217,8 +241,17 @@ export class MatchTracker {
 	#sequence = 0;
 
 	/** Pass a client to start tracking right away, or call {@link handle} with events yourself. */
-	constructor(source?: StatsEventSource) {
+	readonly #identify: PlayerIdentifier;
+
+	/** Pass a client to start tracking right away, or call {@link handle} with events yourself. */
+	constructor(source?: StatsEventSource, options: MatchTrackerOptions = {}) {
+		this.#identify = options.identifyPlayer ?? playerKey;
 		if (source) this.attach(source);
+	}
+
+	/** The key of a player, as used in `key` and in every result. */
+	keyOf(player: IdentifiablePlayer): string {
+		return this.#identify(player);
 	}
 
 	/** Starts listening to a client. Replaces any previous one. */
@@ -343,13 +376,14 @@ export class MatchTracker {
 		return !this.#paused && !this.#ended && !this.#lastGame?.bReplay;
 	}
 
-	#accumulator(player: PlayerRef & { PrimaryId?: string }): PlayerAccumulator {
-		const key = playerKey(player);
+	#accumulator(player: IdentifiablePlayer): PlayerAccumulator {
+		const key = this.#identify(player);
 		let entry = this.#players.get(key);
 		if (!entry) {
 			entry = {
 				key,
 				PrimaryId: player.PrimaryId ?? '',
+				bot: isBot(player),
 				Name: player.Name,
 				Shortcut: player.Shortcut,
 				TeamNum: player.TeamNum,
@@ -364,14 +398,18 @@ export class MatchTracker {
 			this.#players.set(key, entry);
 		}
 		entry.TeamNum = player.TeamNum;
-		if (player.PrimaryId) entry.PrimaryId = player.PrimaryId;
+		entry.Name = player.Name; // keep the latest name
+		if (player.PrimaryId) {
+			entry.PrimaryId = player.PrimaryId;
+			entry.bot = isBot(player);
+		}
 		return entry;
 	}
 
 	#crossbarHit(ref: PlayerRef, ballY: number): void {
 		// Events only carry a PlayerRef: find the full player to get the same key as in UpdateState.
-		const player =
-			this.#lastPlayers.find((p) => p.Name === ref.Name && p.Shortcut === ref.Shortcut && p.TeamNum === ref.TeamNum) ?? ref;
+		const same = (p: PlayerRef) => p.Name === ref.Name && p.Shortcut === ref.Shortcut && p.TeamNum === ref.TeamNum;
+		const player = this.#lastPlayers.find(same) ?? [...this.#players.values()].find((entry) => entry.lastSeen && same(entry.lastSeen))?.lastSeen ?? ref;
 		const entry = this.#accumulator(player);
 		// The blue goal is on the negative Y side.
 		const goalTeam = ballY < 0 ? 0 : 1;
@@ -436,6 +474,7 @@ export class MatchTracker {
 		const players: TrackedPlayerStats[] = [...this.#players.values()].map((entry) => ({
 			key: entry.key,
 			PrimaryId: entry.PrimaryId,
+			bot: entry.bot,
 			Name: entry.Name,
 			Shortcut: entry.Shortcut,
 			TeamNum: entry.TeamNum,
@@ -457,9 +496,10 @@ export class MatchTracker {
 				percent: toPercent(this.#possessionTicks),
 			},
 			boost: {
-				players: players.map(({ key, PrimaryId, Name, Shortcut, TeamNum, boostUsed }) => ({
+				players: players.map(({ key, PrimaryId, bot, Name, Shortcut, TeamNum, boostUsed }) => ({
 					key,
 					PrimaryId,
+					bot,
 					Name,
 					Shortcut,
 					TeamNum,
@@ -481,11 +521,11 @@ export class MatchTracker {
 		const tracked = new Map(stats.players.map((player) => [player.key, player]));
 		const mvpKey = (() => {
 			const mvp = getMvp(scoreboard, winnerTeamNum);
-			return mvp ? playerKey(mvp) : undefined;
+			return mvp ? this.#identify(mvp) : undefined;
 		})();
 
 		// Players who left before the end keep their last known scoreboard (anti rage quit).
-		const present = new Set(scoreboard.map((player) => playerKey(player)));
+		const present = new Set(scoreboard.map((player) => this.#identify(player)));
 		const left = [...this.#players.values()].flatMap((entry) =>
 			entry.lastSeen && !present.has(entry.key) ? [{ player: entry.lastSeen, leftEarly: true, leftAt: entry.lastSeenAt }] : [],
 		);
@@ -493,11 +533,12 @@ export class MatchTracker {
 
 		const playerResults: MatchPlayerResult[] = everyone
 			.map(({ player, leftEarly, leftAt }) => {
-				const key = playerKey(player);
+				const key = this.#identify(player);
 				const own = tracked.get(key);
 				const result: MatchPlayerResult = {
 					key,
 					PrimaryId: player.PrimaryId,
+					bot: isBot(player),
 					Name: player.Name,
 					Shortcut: player.Shortcut,
 					TeamNum: player.TeamNum,

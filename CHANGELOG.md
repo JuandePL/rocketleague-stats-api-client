@@ -12,6 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - **Per player:** boost used, air time, wall time (`onWallTime`), and crossbar and post hits split into `attack` and `defense`.
   - **What counts:** only live play. Kickoff countdowns and goal replays are excluded, and overtime is counted. While the match is paused, everything is frozen (`tracker.paused`).
   - **Match summary:** on `MatchEnded` it emits a `MatchSummary` with the teams, winner, overtime flag and MVP. `playerResults` holds each player's `PrimaryId`, scoreboard and tracked stats.
+- Player identity ([#11]):
+  - **`key`:** real accounts are identified by `PrimaryId`, so a name change doesn't split a player. Bots, which all share `"Unknown|0|0"`, are identified by name.
+  - **Results:** they include `bot`, and series results include `names`, every name the player used.
+  - **Custom rule:** pass `identifyPlayer` to use your own keys, for example to merge accounts.
+  - **Helpers:** `playerKey`, `isBot` and `isBotPrimaryId`.
 - Players who leave before the end (anti rage quit) stay in `playerResults` with `leftEarly: true` and their stats until they left ([#11]):
   - `leftAt` says when they left.
   - They can't be MVP.

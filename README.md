@@ -266,6 +266,13 @@ series.tracker.getStats();                        // live stats of the current m
 | `dispose()`            | Stops listening to the client.                                                                 |
 
 - **Teams are identified by name** (`Game.Teams[].Name`), so they can switch sides between matches. Give them distinct names in the private match settings.
+- **Players are identified by their `key`.** By default it comes from `playerKey()`:
+  - **Real accounts:** the `PrimaryId` (e.g. `"Steam|7656119...|0"`). A player who changes their name stays one player, and `names` lists every name they used. Splitscreen players get different ids, so they stay apart.
+  - **Bots:** they all share `"Unknown|0|0"`, so their key is `"bot:" + name`. Results have `bot: true` for them.
+  - **Your own rule:** pass `identifyPlayer` to `EsportsSeries` or `MatchTracker`, for example to merge someone's Steam and Epic accounts:
+    ```ts
+    new EsportsSeries(client, { identifyPlayer: (p) => (p.PrimaryId && aliases[p.PrimaryId]) || playerKey(p) });
+    ```
 - **Per-team results** include wins, goals, boost used and possession over the whole series.
 - **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, crossbar hits (attack and defense), matches played, matches left early (`leftEarly`) and the number of MVPs.
 - **Per-match player results:** each match in `result.matches` keeps its own `playerResults`.

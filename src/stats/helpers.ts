@@ -24,12 +24,41 @@ export interface TeamTotals {
 /** Scoreboard stats summed by {@link getTeamTotals}. */
 export const TOTAL_STATS = ['Score', 'Goals', 'Shots', 'Assists', 'Saves', 'Touches', 'CarTouches', 'Demos'] as const;
 
+/** A player as seen in `UpdateState` (with `PrimaryId`) or in other events (without it). */
+export type IdentifiablePlayer = PlayerRef & { PrimaryId?: string };
+
+/** Returns the key that identifies a player across ticks and matches. */
+export type PlayerIdentifier = (player: IdentifiablePlayer) => string;
+
+/** `PrimaryId` the game sends for bots. */
+export const BOT_PRIMARY_ID = 'Unknown|0|0';
+
 /**
- * Stable identifier for a player across ticks and matches: `PrimaryId` plus the name,
- * so bots and splitscreen players that share a `PrimaryId` stay apart.
+ * `true` when `PrimaryId` doesn't identify a real account: bots (`"Unknown|0|0"`), a missing id,
+ * or an `Unknown` platform or `0` uid.
  */
-export function playerKey(player: PlayerRef & { PrimaryId?: string }): string {
-	return `${player.PrimaryId ?? ''}:${player.Name}`;
+export function isBotPrimaryId(primaryId: string | undefined): boolean {
+	if (!primaryId) return true;
+	const [platform, uid] = primaryId.split('|');
+	return !platform || platform === 'Unknown' || !uid || uid === '0';
+}
+
+/** `true` for bots (see {@link isBotPrimaryId}). */
+export function isBot(player: { PrimaryId?: string }): boolean {
+	return isBotPrimaryId(player.PrimaryId);
+}
+
+/**
+ * Default identifier for a player across ticks and matches:
+ * - Real accounts: the `PrimaryId` (e.g. `"Steam|7656119...|0"`), so a name change doesn't split the player.
+ *   Splitscreen players get different ids (the last number), so they stay apart.
+ * - Bots, which all share `"Unknown|0|0"`: `"bot:"` plus the name.
+ *
+ * Pass your own {@link PlayerIdentifier} as `identifyPlayer` to `MatchTracker` or `EsportsSeries`
+ * to merge accounts or use your own ids.
+ */
+export function playerKey(player: IdentifiablePlayer): string {
+	return isBot(player) ? `bot:${player.Name}` : player.PrimaryId!;
 }
 
 /** Maps a `TeamNum` to `'blue'` / `'orange'`, or `undefined` for any other value (e.g. `255`). */

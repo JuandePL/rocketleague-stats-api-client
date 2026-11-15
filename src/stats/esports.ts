@@ -1,6 +1,6 @@
 import type { Unsubscribe } from '../client.js';
 import { teamName, teamSide, TOTAL_STATS } from './helpers.js';
-import { MatchTracker, type CrossbarHits, type MatchSummary, type StatsEventSource } from './match.js';
+import { MatchTracker, type CrossbarHits, type MatchSummary, type MatchTrackerOptions, type StatsEventSource } from './match.js';
 
 /** How a series ends. */
 export type SeriesFormat =
@@ -16,7 +16,7 @@ export interface SeriesOptions {
 	format?: SeriesFormat;
 }
 
-export interface EsportsSeriesOptions extends Partial<SeriesOptions> {
+export interface EsportsSeriesOptions extends Partial<SeriesOptions>, MatchTrackerOptions {
 	/**
 	 * Record without calling {@link EsportsSeries.start}: the series starts right away, and a new one
 	 * starts by itself with the same options when a match ends after the previous series finished.
@@ -43,11 +43,16 @@ export interface SeriesTeamResult {
 
 /** A player's totals over the series. The results of each match are in `MatchSummary.playerResults`. */
 export interface SeriesPlayerResult {
-	/** See {@link playerKey}. */
+	/** Identifies the player across matches. See {@link playerKey} and the `identifyPlayer` option. */
 	key: string;
-	/** Platform id in the format `Platform|Uid|Splitscreen` (e.g. `"Steam|123|0"`). */
+	/** Platform id in the format `Platform|Uid|Splitscreen` (e.g. `"Steam|123|0"`). Bots have `"Unknown|0|0"`. */
 	PrimaryId: string;
+	/** `true` for bots. */
+	bot: boolean;
+	/** Latest name used in the series. */
 	Name: string;
+	/** Every name the player used in the series, oldest first. */
+	names: string[];
 	/** Name of the team the player played for in their last match. */
 	team: string;
 	/** Matches played, including the ones they left before the end. */
@@ -130,7 +135,7 @@ export class EsportsSeries {
 	constructor(source?: StatsEventSource, options: EsportsSeriesOptions = {}) {
 		this.#options = normalizeOptions(options);
 		this.#autoStart = options.autoStart ?? true;
-		this.tracker = new MatchTracker(source);
+		this.tracker = new MatchTracker(source, { identifyPlayer: options.identifyPlayer });
 		this.#unsubscribe = this.tracker.onMatchEnd((summary) => this.#record(summary));
 		if (this.#autoStart) this.start(this.#options);
 	}
@@ -254,7 +259,9 @@ export class EsportsSeries {
 					total = {
 						key: result.key,
 						PrimaryId: result.PrimaryId,
+						bot: result.bot,
 						Name: result.Name,
+						names: [],
 						team: result.team,
 						matches: 0,
 						leftEarly: 0,
@@ -275,6 +282,8 @@ export class EsportsSeries {
 					players.set(result.key, total);
 				}
 				total.team = result.team;
+				total.Name = result.Name;
+				if (!total.names.includes(result.Name)) total.names.push(result.Name);
 				total.matches++;
 				if (result.leftEarly) total.leftEarly++;
 				if (result.mvp) total.mvps++;
