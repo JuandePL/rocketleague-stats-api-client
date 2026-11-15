@@ -311,6 +311,8 @@ npm test
 npm run build
 ```
 
+CI runs the same checks on every pull request, on Node.js 22 and 24, on Linux and Windows. Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 MIT. This project is not affiliated with Psyonix or Epic Games.
