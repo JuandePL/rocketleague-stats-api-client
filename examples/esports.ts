@@ -71,7 +71,6 @@ series.onMatchEnd((match, result) => {
 	console.log(`\nGame ${result.matches.length}: ${blue?.Name} ${blue?.Score} - ${orange?.Score} ${orange?.Name}${overtime}`);
 	console.log(`  Time played: ${Math.round(match.secondsPlayed)} s   MVP: ${match.mvp?.Name ?? '-'}`);
 	console.log(`  Possession: blue ${pct(match.possession.percent.blue)} / orange ${pct(match.possession.percent.orange)}`);
-	console.log(`  Pressure:   blue ${pct(match.fieldDomination.pressure.blue)} / orange ${pct(match.fieldDomination.pressure.orange)}`);
 	console.log(`  Boost used: blue ${match.boost.teams.blue.toFixed(0)} / orange ${match.boost.teams.orange.toFixed(0)}`);
 	console.log('  Players:');
 	for (const player of match.playerResults) printPlayer(player, player.mvp ? '  MVP' : '');

@@ -153,19 +153,6 @@ describe('MatchTracker', () => {
 		expect(possession.seconds.blue + possession.seconds.orange).toBeLessThanOrEqual(secondsPlayed);
 	});
 
-	it('computes field domination and pressure from the last hit location', () => {
-		const { tracker, match } = setup();
-		match.start();
-		match.hit(1, -2000); // ball in the blue half
-		match.play(8);
-		match.hit(0, 1500); // ball in the orange half
-		match.play(2);
-
-		const { fieldDomination } = tracker.getStats();
-		expect(fieldDomination.percent).toEqual({ blueHalf: 80, orangeHalf: 20 });
-		expect(fieldDomination.pressure).toEqual({ blue: 20, orange: 80 });
-	});
-
 	it('does not count kickoff countdowns, pauses or goal replays', () => {
 		const { tracker, match } = setup();
 		match.start();
@@ -193,7 +180,7 @@ describe('MatchTracker', () => {
 	});
 
 	describe('pause', () => {
-		it('freezes time, possession and field domination', () => {
+		it('freezes time and possession', () => {
 			const { tracker, match } = setup();
 			match.start();
 			match.hit(0, 1000);
@@ -202,8 +189,7 @@ describe('MatchTracker', () => {
 
 			match.send(ev('MatchPaused'));
 			expect(tracker.paused).toBe(true);
-			match.ballTeam = 1;
-			match.hit(1, -1000); // a hit reported during the pause is ignored
+			match.ballTeam = 1; // orange touches the ball during the pause: not counted
 			match.frozen(20);
 			expect(tracker.getStats()).toEqual(before);
 
@@ -212,8 +198,7 @@ describe('MatchTracker', () => {
 			match.play(10);
 			const after = tracker.getStats();
 			expect(after.secondsPlayed).toBe(20);
-			// The ball is still counted in the orange half, where it was before the pause.
-			expect(after.fieldDomination.percent.orangeHalf).toBe(100);
+			expect(after.possession.seconds.blue / after.possession.seconds.orange).toBeCloseTo(1, 0);
 		});
 
 		it('freezes boost usage', () => {
@@ -351,7 +336,6 @@ describe('MatchTracker', () => {
 			expect(match.clock).toBe(5);
 			expect(stats.secondsPlayed).toBe(15);
 			expect(stats.possession.seconds.blue / stats.possession.seconds.orange).toBeCloseTo(2);
-			expect(stats.fieldDomination.pressure.blue / stats.fieldDomination.pressure.orange).toBeCloseTo(2);
 		});
 
 		it('does not count the countdown before overtime', () => {
@@ -576,7 +560,7 @@ describe('EsportsSeries', () => {
 		expect(result.teams[0]).toMatchObject({ name: 'Blue', wins: 3, goals: 8 });
 		expect(result.teams[1]).toMatchObject({ name: 'Orange', wins: 1, goals: 5 });
 		expect(result.teams[0].possessionPercent).toBeCloseTo(75, -1);
-		expect(result.teams[0].pressurePercent).toBeCloseTo(75, -1);
+		expect(result.teams[0]).not.toHaveProperty('pressurePercent');
 
 		// With autoStart (default), the next match starts a new series.
 		playMatch(1, [0, 1]);

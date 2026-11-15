@@ -38,8 +38,6 @@ export interface SeriesTeamResult {
 	goals: number;
 	/** Share of possession over the whole series, 0–100. */
 	possessionPercent: number;
-	/** Share of time the ball was in the opponent's half over the whole series, 0–100. */
-	pressurePercent: number;
 	boostUsed: number;
 }
 
@@ -211,13 +209,12 @@ export class EsportsSeries {
 	}
 
 	#teams(): SeriesTeamResult[] {
-		const teams = new Map<string, { result: SeriesTeamResult; possession: number; pressure: number }>();
+		const teams = new Map<string, { result: SeriesTeamResult; possession: number }>();
 		let possessionTotal = 0;
-		let pressureTotal = 0;
 		const get = (name: string) => {
 			let entry = teams.get(name);
 			if (!entry) {
-				entry = { result: { name, wins: 0, goals: 0, possessionPercent: 0, pressurePercent: 0, boostUsed: 0 }, possession: 0, pressure: 0 };
+				entry = { result: { name, wins: 0, goals: 0, possessionPercent: 0, boostUsed: 0 }, possession: 0 };
 				teams.set(name, entry);
 			}
 			return entry;
@@ -230,19 +227,15 @@ export class EsportsSeries {
 				entry.result.goals += match.teams.find((team) => team.TeamNum === teamNum)?.Score ?? 0;
 				entry.result.boostUsed += match.boost.teams[side];
 				entry.possession += match.possession.seconds[side];
-				// Pressure for blue = time in the orange half, and the other way around.
-				entry.pressure += teamNum === 0 ? match.fieldDomination.seconds.orangeHalf : match.fieldDomination.seconds.blueHalf;
 			}
 			get(teamName(match.teams, match.winnerTeamNum)).result.wins++;
 			possessionTotal += match.possession.seconds.blue + match.possession.seconds.orange;
-			pressureTotal += match.fieldDomination.seconds.blueHalf + match.fieldDomination.seconds.orangeHalf;
 		}
 
 		return [...teams.values()]
-			.map(({ result, possession, pressure }) => ({
+			.map(({ result, possession }) => ({
 				...result,
 				possessionPercent: possessionTotal > 0 ? (possession / possessionTotal) * 100 : 0,
-				pressurePercent: pressureTotal > 0 ? (pressure / pressureTotal) * 100 : 0,
 			}))
 			.sort((a, b) => b.wins - a.wins || b.goals - a.goals);
 	}

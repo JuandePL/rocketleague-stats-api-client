@@ -64,18 +64,6 @@ export interface MatchStats {
 	secondsPlayed: number;
 	/** Time each team was the last to touch the ball (`Game.Ball.TeamNum`). */
 	possession: { seconds: TeamSplit; percent: TeamSplit };
-	/**
-	 * Time the ball spent in each half. `pressure` credits the attacking team:
-	 * ball 80% in the blue half = 80% pressure for orange.
-	 *
-	 * `UpdateState` has no ball position, so the half is taken from the last `BallHit`
-	 * and kept until the next touch. Time before the first touch of each kickoff is not counted.
-	 */
-	fieldDomination: {
-		seconds: { blueHalf: number; orangeHalf: number };
-		percent: { blueHalf: number; orangeHalf: number };
-		pressure: TeamSplit;
-	};
 	/** Boost spent, per player and per team. Needs the `SPECTATOR` `Boost` field, so it stays at 0 when playing. */
 	boost: { players: PlayerBoostUsage[]; teams: TeamSplit };
 	/** Boost, air time and crossbar hits of every player seen in the match. */
@@ -128,12 +116,12 @@ function isInAir(player: Player): boolean {
 }
 
 /**
- * Tracks ball possession, boost usage, field domination, air time and crossbar hits for the current match.
+ * Tracks ball possession, boost usage, air time, wall time and crossbar hits for the current match.
  *
  * ```ts
  * const tracker = new MatchTracker(client);
  * tracker.onMatchEnd((summary) => console.log(summary.possession.percent, summary.mvp?.Name));
- * setInterval(() => console.log(tracker.getStats().fieldDomination.pressure), 5000);
+ * setInterval(() => console.log(tracker.getStats().possession.percent), 5000);
  * ```
  *
  * It resets itself when a new match starts (`MatchCreated` / `MatchInitialized`).
@@ -149,7 +137,6 @@ export class MatchTracker {
 	#paused = false;
 	#ended = false;
 	#lastClock: number | undefined;
-	#ballHalf: 'blueHalf' | 'orangeHalf' | undefined;
 	#lastGame: Game | undefined;
 	#lastPlayers: Player[] = [];
 	#matchGuid: string | undefined;
@@ -158,7 +145,6 @@ export class MatchTracker {
 	#liveTicks = 0;
 	#secondsPlayed = 0;
 	#possessionTicks: TeamSplit = { blue: 0, orange: 0 };
-	#halfTicks = { blueHalf: 0, orangeHalf: 0 };
 	#players = new Map<string, PlayerAccumulator>();
 
 	/** Pass a client to start tracking right away, or call {@link handle} with events yourself. */
@@ -180,7 +166,7 @@ export class MatchTracker {
 
 	/**
 	 * `true` between `MatchPaused` and `MatchUnpaused`. While paused, every stat is frozen:
-	 * time, possession, field domination, boost usage, air time, wall time and crossbar hits.
+	 * time, possession, boost usage, air time, wall time and crossbar hits.
 	 */
 	get paused(): boolean {
 		return this.#paused;
@@ -204,14 +190,12 @@ export class MatchTracker {
 		this.#paused = false;
 		this.#ended = false;
 		this.#lastClock = undefined;
-		this.#ballHalf = undefined;
 		this.#lastGame = undefined;
 		this.#lastPlayers = [];
 		this.#matchGuid = undefined;
 		this.#liveTicks = 0;
 		this.#secondsPlayed = 0;
 		this.#possessionTicks = { blue: 0, orange: 0 };
-		this.#halfTicks = { blueHalf: 0, orangeHalf: 0 };
 		this.#players.clear();
 	}
 
@@ -225,21 +209,16 @@ export class MatchTracker {
 			case 'RoundStarted':
 				this.#roundActive = true;
 				this.#sawRoundStart = true;
-				this.#ballHalf = undefined; // kickoff: ball at center
 				break;
 			case 'CountdownBegin':
 			case 'GoalScored':
 				this.#roundActive = false;
-				this.#ballHalf = undefined;
 				break;
 			case 'MatchPaused':
 				this.#paused = true;
 				break;
 			case 'MatchUnpaused':
 				this.#paused = false;
-				break;
-			case 'BallHit':
-				if (this.#counting()) this.#ballHalf = event.Data.Ball.Location.Y < 0 ? 'blueHalf' : 'orangeHalf';
 				break;
 			case 'CrossbarHit':
 				if (this.#counting()) this.#crossbarHit(event.Data.BallLastTouch.Player, event.Data.BallLocation.Y);
@@ -314,7 +293,6 @@ export class MatchTracker {
 		if (clockStep <= MAX_CLOCK_STEP) this.#secondsPlayed += clockStep;
 		const side = teamSide(game.Ball.TeamNum);
 		if (side) this.#possessionTicks[side]++;
-		if (this.#ballHalf) this.#halfTicks[this.#ballHalf]++;
 		for (const [player, entry] of entries) {
 			if (isInAir(player)) entry.airTicks++;
 			else if (isOnWall(player)) entry.wallTicks++;
@@ -335,9 +313,6 @@ export class MatchTracker {
 	/** Current stats. Can be called at any time during the match. */
 	getStats(): MatchStats {
 		const seconds = (ticks: number) => (this.#liveTicks > 0 ? (ticks / this.#liveTicks) * this.#secondsPlayed : 0);
-
-		const halfSeconds = { blueHalf: seconds(this.#halfTicks.blueHalf), orangeHalf: seconds(this.#halfTicks.orangeHalf) };
-		const halfPercent = toPercent({ blue: this.#halfTicks.blueHalf, orange: this.#halfTicks.orangeHalf });
 
 		const players: TrackedPlayerStats[] = [...this.#players.values()].map((entry) => ({
 			key: entry.key,
@@ -360,12 +335,6 @@ export class MatchTracker {
 			possession: {
 				seconds: { blue: seconds(this.#possessionTicks.blue), orange: seconds(this.#possessionTicks.orange) },
 				percent: toPercent(this.#possessionTicks),
-			},
-			fieldDomination: {
-				seconds: halfSeconds,
-				percent: { blueHalf: halfPercent.blue, orangeHalf: halfPercent.orange },
-				// Ball in the blue half = orange is attacking.
-				pressure: { blue: halfPercent.orange, orange: halfPercent.blue },
 			},
 			boost: {
 				players: players.map(({ key, Name, Shortcut, TeamNum, boostUsed }) => ({ key, Name, Shortcut, TeamNum, boostUsed })),
