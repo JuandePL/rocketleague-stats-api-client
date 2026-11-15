@@ -7,8 +7,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- CI with GitHub Actions: typecheck, tests, build and package check on Node.js 22 and 24, on Linux and Windows.
-- This changelog.
+- `MatchTracker` tracks live stats of the current match ([#11]):
+  - **Ball possession:** time each team was the last to touch the ball (`Game.Ball.TeamNum`).
+  - **Per player:** boost used, air time, wall time (`onWallTime`), and crossbar and post hits split into `attack` and `defense`.
+  - **What counts:** only live play. Kickoff countdowns and goal replays are excluded, and overtime is counted. While the match is paused, everything is frozen (`tracker.paused`).
+  - **Match summary:** on `MatchEnded` it emits a `MatchSummary` with the teams, winner, overtime flag and MVP. `playerResults` holds each player's `PrimaryId`, scoreboard and tracked stats.
+- Players who leave before the end (anti rage quit) stay in `playerResults` with `leftEarly: true` and their stats until they left ([#11]):
+  - `leftAt` says when they left.
+  - They can't be MVP.
+- Match timeline ([#11]):
+  - Every event except `UpdateState` is kept with its `MatchMoment`: clock, play time, date and order.
+  - `MatchSummary` has `timeline`, `endMoment` and `goals`.
+  - Live, use `tracker.getTimeline()` and `tracker.getMoment()`.
+- Timing helpers ([#11]):
+  - `timeFromPlayerLeftToMatchEnd`, `timeFromPlayerLeftToNextGoal` and `timeFromPlayerLeftTo` (any event, with an optional filter).
+  - `findEventAfter` and `timeBetween`.
+  - Each time difference is given as play time, clock time and real time.
+- `EsportsSeries`, the esports mode: records series of matches in memory ([#11]).
+  - **Options:** `games` (default 5) and `format` (`'best-of'` or `'play-all'`).
+  - **`autoStart`:** on by default. The series records without calling `start()`, and a new one starts after each series ends.
+  - **Controls:** `start()`, `restart()` and `stop()`.
+  - **Results:** per team, per player and per match. Also the series winner and MVP.
+  - **Listeners:** `onSeriesStart`, `onMatchEnd` and `onSeriesEnd`.
+- General helpers ([#11]):
+  - `getMvp`, `getTopPlayer` and `getTeamTotals`.
+  - `formatMatchClock`, which gives `"02:35"` / `"+01:10"` by default, or `"2:35"` with `{ padMinutes: false }`.
+- `examples/esports.ts` records series and prints the stats of each match and player ([#11]).
+- CI with GitHub Actions: typecheck, tests, build and package check on Node.js 22 and 24, on Linux and Windows ([#12]).
+- This changelog ([#12]).
+
+### Not included
+
+- **Field domination** (time the ball spends in each half): `UpdateState` doesn't send the ball position. It will be added if a future Stats API update includes it.
 
 ## [1.1.0] - 2026-11-14
 
@@ -54,3 +84,5 @@ First stable release, published as `@juande_pl/rocketleague-stats-api-client`.
 [#2]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/2
 [#7]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/7
 [#9]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/9
+[#11]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/11
+[#12]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/12
