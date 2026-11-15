@@ -199,12 +199,12 @@ When the match ends, it gives you a `MatchSummary` with the teams, the winner an
 **Players who leave before the end (rage quit, disconnect)** stay in `playerResults` with `leftEarly: true` and the stats they had when they were last seen. They can't be MVP. A player who leaves and comes back before the end counts as a normal player.
 
 `leftAt` tells when they left:
-- `clock`: the match clock as the game shows it, like `"2:35"`, or `"+1:10"` in overtime.
+- `clock`: the match clock as text, like `"02:35"`, or `"+01:10"` in overtime.
 - `timeSeconds` and `overtime`: the same clock as raw values.
 - `secondsPlayed`: seconds of play until then.
 - `date`: the real time.
 
-`formatMatchClock(timeSeconds, overtime)` formats any clock value the same way.
+`formatMatchClock(timeSeconds, overtime)` formats any clock value the same way. Minutes have two digits by default. Pass `{ padMinutes: false }` for `"2:35"`.
 
 #### Time between a player leaving and the end, a goal, or any event
 

@@ -50,7 +50,7 @@ export interface MatchMoment {
 	/** Match clock: seconds remaining, or seconds into overtime when `overtime` is `true`. */
 	timeSeconds: number;
 	overtime: boolean;
-	/** The clock as the game shows it: `"2:35"` remaining, or `"+1:10"` in overtime. */
+	/** The match clock as text: `"02:35"` remaining, or `"+01:10"` in overtime (see `formatMatchClock`). */
 	clock: string;
 	/** Seconds of play tracked until then (same measure as `MatchStats.secondsPlayed`). */
 	secondsPlayed: number;
@@ -72,10 +72,19 @@ export interface GoalRecord {
 	data: GoalScoredData;
 }
 
-/** Formats the match clock like the game: `"2:35"`, or `"+1:10"` in overtime. */
-export function formatMatchClock(timeSeconds: number, overtime = false): string {
+export interface FormatMatchClockOptions {
+	/** Pad the minutes to two digits: `"02:35"` instead of `"2:35"`. @default true */
+	padMinutes?: boolean;
+}
+
+/**
+ * Formats the match clock: `"02:35"`, or `"+01:10"` in overtime.
+ * Pass `{ padMinutes: false }` for `"2:35"` / `"+1:10"`.
+ */
+export function formatMatchClock(timeSeconds: number, overtime = false, options: FormatMatchClockOptions = {}): string {
 	const total = Math.max(0, Math.round(timeSeconds));
-	const clock = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+	const minutes = String(Math.floor(total / 60));
+	const clock = `${(options.padMinutes ?? true) ? minutes.padStart(2, '0') : minutes}:${String(total % 60).padStart(2, '0')}`;
 	return overtime ? `+${clock}` : clock;
 }
 

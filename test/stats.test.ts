@@ -3,6 +3,7 @@ import {
 	EsportsSeries,
 	type EsportsSeriesOptions,
 	findEventAfter,
+	formatMatchClock,
 	getMvp,
 	getTeamTotals,
 	getTopPlayer,
@@ -108,6 +109,18 @@ class Match {
 }
 
 describe('helpers', () => {
+	it('formats the match clock with two-digit minutes by default', () => {
+		expect(formatMatchClock(155)).toBe('02:35');
+		expect(formatMatchClock(300)).toBe('05:00');
+		expect(formatMatchClock(5)).toBe('00:05');
+		expect(formatMatchClock(70, true)).toBe('+01:10');
+		expect(formatMatchClock(725, true)).toBe('+12:05');
+		expect(formatMatchClock(155, false, { padMinutes: false })).toBe('2:35');
+		expect(formatMatchClock(70, true, { padMinutes: false })).toBe('+1:10');
+		expect(formatMatchClock(-3)).toBe('00:00');
+		expect(formatMatchClock(154.6)).toBe('02:35');
+	});
+
 	const players = [
 		player('Ana', 0, { Score: 300, Goals: 2, Saves: 1 }),
 		player('Bob', 0, { Score: 450, Goals: 1, Saves: 3 }),
@@ -562,7 +575,7 @@ describe('MatchTracker', () => {
 
 			const results = onEnd.mock.calls[0]![0].playerResults;
 			const left = results.find((p: { Name: string }) => p.Name === 'Cid');
-			expect(left.leftAt).toMatchObject({ timeSeconds: 155, overtime: false, clock: '2:35', secondsPlayed: 5 });
+			expect(left.leftAt).toMatchObject({ timeSeconds: 155, overtime: false, clock: '02:35', secondsPlayed: 5 });
 			expect(left.leftAt.date).toBeInstanceOf(Date);
 			expect(results.find((p: { Name: string }) => p.Name === 'Ana')).not.toHaveProperty('leftAt');
 		});
@@ -584,7 +597,7 @@ describe('MatchTracker', () => {
 			match.end(0, [1, 0]);
 
 			const left = onEnd.mock.calls[0]![0].playerResults.find((p: { Name: string }) => p.Name === 'Cid');
-			expect(left.leftAt).toMatchObject({ timeSeconds: 70, overtime: true, clock: '+1:10', secondsPlayed: 80 });
+			expect(left.leftAt).toMatchObject({ timeSeconds: 70, overtime: true, clock: '+01:10', secondsPlayed: 80 });
 		});
 
 		describe('time from leaving to the end, a goal or any event', () => {
@@ -614,14 +627,14 @@ describe('MatchTracker', () => {
 				const { summary, cid } = playWithQuit();
 				expect(timeFromLeftToEnd(summary, cid)).toMatchObject({ secondsPlayed: 30, clockSeconds: 30 });
 				expect(timeFromLeftToEnd(summary, cid)!.realSeconds).toBeGreaterThanOrEqual(0);
-				expect(summary.endMoment).toMatchObject({ clock: '2:05', secondsPlayed: 35 });
+				expect(summary.endMoment).toMatchObject({ clock: '02:05', secondsPlayed: 35 });
 			});
 
 			it('measures the time until the next goal', () => {
 				const { summary, cid } = playWithQuit();
 				expect(timeFromLeftToNextGoal(summary, cid)).toMatchObject({ secondsPlayed: 10, clockSeconds: 10 });
 				expect(summary.goals).toHaveLength(1);
-				expect(summary.goals[0]!.moment.clock).toBe('2:25');
+				expect(summary.goals[0]!.moment.clock).toBe('02:25');
 			});
 
 			it('measures the time until any event, with an optional filter, by result or key', () => {
@@ -630,7 +643,7 @@ describe('MatchTracker', () => {
 				// No goal by orange after Cid left.
 				expect(timeFromLeftTo(summary, cid, 'GoalScored', (e) => e.Data.Scorer.TeamNum === 1)).toBeUndefined();
 				expect(timeFromLeftTo(summary, cid, 'GoalScored', (e) => e.Data.Scorer.TeamNum === 0)).toMatchObject({ clockSeconds: 10 });
-				expect(findEventAfter(summary, cid.leftAt!, 'CountdownBegin')?.moment.clock).toBe('2:25');
+				expect(findEventAfter(summary, cid.leftAt!, 'CountdownBegin')?.moment.clock).toBe('02:25');
 			});
 
 			it('returns undefined for players who stayed, or when there was no goal after leaving', () => {
@@ -669,7 +682,7 @@ describe('MatchTracker', () => {
 				match.end(0, [1, 0]);
 				const summary: MatchSummary = onEnd.mock.calls[0]![0];
 				expect(timeFromLeftToNextGoal(summary, 'Steam|Cid|0:Cid')).toMatchObject({ clockSeconds: 15, secondsPlayed: 15 });
-				expect(summary.endMoment).toMatchObject({ clock: '+0:10', overtime: true });
+				expect(summary.endMoment).toMatchObject({ clock: '+00:10', overtime: true });
 			});
 
 			it('keeps a timeline of every event except UpdateState, and timeBetween goes both ways', () => {
