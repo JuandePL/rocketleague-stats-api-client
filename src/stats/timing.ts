@@ -76,7 +76,7 @@ export function timeFromPlayerLeftTo<E extends EventName>(
 }
 
 /** Time from the moment a player left to the end of the match. `undefined` if they didn't leave early. */
-export function timeFromPlayerLeftToEnd(summary: Pick<MatchSummary, 'playerResults' | 'endMoment'>, player: PlayerLike): TimeDifference | undefined {
+export function timeFromPlayerLeftToMatchEnd(summary: Pick<MatchSummary, 'playerResults' | 'endMoment'>, player: PlayerLike): TimeDifference | undefined {
 	const leftAt = leftAtOf(summary, player);
 	return leftAt ? timeBetween(leftAt, summary.endMoment) : undefined;
 }

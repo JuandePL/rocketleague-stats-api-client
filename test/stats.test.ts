@@ -10,7 +10,7 @@ import {
 	MatchTracker,
 	timeBetween,
 	timeFromPlayerLeftTo,
-	timeFromPlayerLeftToEnd,
+	timeFromPlayerLeftToMatchEnd,
 	timeFromPlayerLeftToNextGoal,
 	type AnyEventListener,
 	type Game,
@@ -625,8 +625,8 @@ describe('MatchTracker', () => {
 
 			it('measures the time until the match ended', () => {
 				const { summary, cid } = playWithQuit();
-				expect(timeFromPlayerLeftToEnd(summary, cid)).toMatchObject({ secondsPlayed: 30, clockSeconds: 30 });
-				expect(timeFromPlayerLeftToEnd(summary, cid)!.realSeconds).toBeGreaterThanOrEqual(0);
+				expect(timeFromPlayerLeftToMatchEnd(summary, cid)).toMatchObject({ secondsPlayed: 30, clockSeconds: 30 });
+				expect(timeFromPlayerLeftToMatchEnd(summary, cid)!.realSeconds).toBeGreaterThanOrEqual(0);
 				expect(summary.endMoment).toMatchObject({ clock: '02:05', secondsPlayed: 35 });
 			});
 
@@ -649,7 +649,7 @@ describe('MatchTracker', () => {
 			it('returns undefined for players who stayed, or when there was no goal after leaving', () => {
 				const { summary } = playWithQuit();
 				const ana = summary.playerResults.find((p) => p.Name === 'Ana')!;
-				expect(timeFromPlayerLeftToEnd(summary, ana)).toBeUndefined();
+				expect(timeFromPlayerLeftToMatchEnd(summary, ana)).toBeUndefined();
 				expect(timeFromPlayerLeftToNextGoal(summary, ana)).toBeUndefined();
 
 				const { tracker, match } = setup();

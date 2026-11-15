@@ -24,7 +24,7 @@ import {
 	type MatchPlayerResult,
 	type SeriesOptions,
 	type SeriesPlayerResult,
-	timeFromPlayerLeftToEnd,
+	timeFromPlayerLeftToMatchEnd,
 	timeFromPlayerLeftToNextGoal,
 } from '../src/index.js';
 
@@ -84,7 +84,7 @@ series.onMatchEnd((match, result) => {
 	for (const player of match.playerResults) {
 		let left = '';
 		if (player.leftAt) {
-			const toEnd = timeFromPlayerLeftToEnd(match, player);
+			const toEnd = timeFromPlayerLeftToMatchEnd(match, player);
 			const toGoal = timeFromPlayerLeftToNextGoal(match, player);
 			left = `  LEFT at ${player.leftAt.clock}, ${Math.round(toEnd?.clockSeconds ?? 0)} s before the end`;
 			left += toGoal ? `, ${Math.round(toGoal.clockSeconds)} s before the next goal` : ', no goal after';
