@@ -59,11 +59,11 @@ function leftAtOf(summary: Pick<MatchSummary, 'playerResults'>, player: PlayerLi
  * `undefined` if the player didn't leave early, or if no such event happened after they left.
  *
  * ```ts
- * timeFromLeftTo(summary, player, 'GoalScored', (e) => e.Data.Scorer.TeamNum !== player.TeamNum); // until conceding
- * timeFromLeftTo(summary, player, 'StatfeedEvent', (e) => e.Data.EventName === 'Demolish');
+ * timeFromPlayerLeftTo(summary, player, 'GoalScored', (e) => e.Data.Scorer.TeamNum !== player.TeamNum); // until conceding
+ * timeFromPlayerLeftTo(summary, player, 'StatfeedEvent', (e) => e.Data.EventName === 'Demolish');
  * ```
  */
-export function timeFromLeftTo<E extends EventName>(
+export function timeFromPlayerLeftTo<E extends EventName>(
 	summary: Pick<MatchSummary, 'playerResults' | 'timeline'>,
 	player: PlayerLike,
 	eventName: E,
@@ -76,7 +76,7 @@ export function timeFromLeftTo<E extends EventName>(
 }
 
 /** Time from the moment a player left to the end of the match. `undefined` if they didn't leave early. */
-export function timeFromLeftToEnd(summary: Pick<MatchSummary, 'playerResults' | 'endMoment'>, player: PlayerLike): TimeDifference | undefined {
+export function timeFromPlayerLeftToEnd(summary: Pick<MatchSummary, 'playerResults' | 'endMoment'>, player: PlayerLike): TimeDifference | undefined {
 	const leftAt = leftAtOf(summary, player);
 	return leftAt ? timeBetween(leftAt, summary.endMoment) : undefined;
 }
@@ -85,9 +85,9 @@ export function timeFromLeftToEnd(summary: Pick<MatchSummary, 'playerResults' | 
  * Time from the moment a player left to the next goal, by any team.
  * `undefined` if they didn't leave early, or if no goal was scored after they left.
  */
-export function timeFromLeftToNextGoal(
+export function timeFromPlayerLeftToNextGoal(
 	summary: Pick<MatchSummary, 'playerResults' | 'timeline'>,
 	player: PlayerLike,
 ): TimeDifference | undefined {
-	return timeFromLeftTo(summary, player, 'GoalScored');
+	return timeFromPlayerLeftTo(summary, player, 'GoalScored');
 }

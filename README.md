@@ -209,12 +209,12 @@ When the match ends, it gives you a `MatchSummary` with the teams, the winner an
 #### Time between a player leaving and the end, a goal, or any event
 
 ```ts
-import { timeFromLeftToEnd, timeFromLeftToNextGoal, timeFromLeftTo, timeBetween } from '@juande_pl/rocketleague-stats-api-client';
+import { timeFromPlayerLeftToEnd, timeFromPlayerLeftToNextGoal, timeFromPlayerLeftTo, timeBetween } from '@juande_pl/rocketleague-stats-api-client';
 
-timeFromLeftToEnd(summary, player);        // { secondsPlayed, clockSeconds, realSeconds } until the match ended
-timeFromLeftToNextGoal(summary, player);   // until the next goal, by any team
-timeFromLeftTo(summary, player, 'GoalScored', (e) => e.Data.Scorer.TeamNum !== player.TeamNum); // until their team conceded
-timeFromLeftTo(summary, player, 'StatfeedEvent', (e) => e.Data.EventName === 'Save');              // any event, with an optional filter
+timeFromPlayerLeftToEnd(summary, player);        // { secondsPlayed, clockSeconds, realSeconds } until the match ended
+timeFromPlayerLeftToNextGoal(summary, player);   // until the next goal, by any team
+timeFromPlayerLeftTo(summary, player, 'GoalScored', (e) => e.Data.Scorer.TeamNum !== player.TeamNum); // until their team conceded
+timeFromPlayerLeftTo(summary, player, 'StatfeedEvent', (e) => e.Data.EventName === 'Save');              // any event, with an optional filter
 timeBetween(summary.goals[0].moment, summary.endMoment);                                           // any two moments
 ```
 

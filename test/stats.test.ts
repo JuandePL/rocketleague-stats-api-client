@@ -9,9 +9,9 @@ import {
 	getTopPlayer,
 	MatchTracker,
 	timeBetween,
-	timeFromLeftTo,
-	timeFromLeftToEnd,
-	timeFromLeftToNextGoal,
+	timeFromPlayerLeftTo,
+	timeFromPlayerLeftToEnd,
+	timeFromPlayerLeftToNextGoal,
 	type AnyEventListener,
 	type Game,
 	type MatchSummary,
@@ -625,32 +625,32 @@ describe('MatchTracker', () => {
 
 			it('measures the time until the match ended', () => {
 				const { summary, cid } = playWithQuit();
-				expect(timeFromLeftToEnd(summary, cid)).toMatchObject({ secondsPlayed: 30, clockSeconds: 30 });
-				expect(timeFromLeftToEnd(summary, cid)!.realSeconds).toBeGreaterThanOrEqual(0);
+				expect(timeFromPlayerLeftToEnd(summary, cid)).toMatchObject({ secondsPlayed: 30, clockSeconds: 30 });
+				expect(timeFromPlayerLeftToEnd(summary, cid)!.realSeconds).toBeGreaterThanOrEqual(0);
 				expect(summary.endMoment).toMatchObject({ clock: '02:05', secondsPlayed: 35 });
 			});
 
 			it('measures the time until the next goal', () => {
 				const { summary, cid } = playWithQuit();
-				expect(timeFromLeftToNextGoal(summary, cid)).toMatchObject({ secondsPlayed: 10, clockSeconds: 10 });
+				expect(timeFromPlayerLeftToNextGoal(summary, cid)).toMatchObject({ secondsPlayed: 10, clockSeconds: 10 });
 				expect(summary.goals).toHaveLength(1);
 				expect(summary.goals[0]!.moment.clock).toBe('02:25');
 			});
 
 			it('measures the time until any event, with an optional filter, by result or key', () => {
 				const { summary, cid } = playWithQuit();
-				expect(timeFromLeftTo(summary, cid.key, 'RoundStarted')).toMatchObject({ secondsPlayed: 10, clockSeconds: 10 });
+				expect(timeFromPlayerLeftTo(summary, cid.key, 'RoundStarted')).toMatchObject({ secondsPlayed: 10, clockSeconds: 10 });
 				// No goal by orange after Cid left.
-				expect(timeFromLeftTo(summary, cid, 'GoalScored', (e) => e.Data.Scorer.TeamNum === 1)).toBeUndefined();
-				expect(timeFromLeftTo(summary, cid, 'GoalScored', (e) => e.Data.Scorer.TeamNum === 0)).toMatchObject({ clockSeconds: 10 });
+				expect(timeFromPlayerLeftTo(summary, cid, 'GoalScored', (e) => e.Data.Scorer.TeamNum === 1)).toBeUndefined();
+				expect(timeFromPlayerLeftTo(summary, cid, 'GoalScored', (e) => e.Data.Scorer.TeamNum === 0)).toMatchObject({ clockSeconds: 10 });
 				expect(findEventAfter(summary, cid.leftAt!, 'CountdownBegin')?.moment.clock).toBe('02:25');
 			});
 
 			it('returns undefined for players who stayed, or when there was no goal after leaving', () => {
 				const { summary } = playWithQuit();
 				const ana = summary.playerResults.find((p) => p.Name === 'Ana')!;
-				expect(timeFromLeftToEnd(summary, ana)).toBeUndefined();
-				expect(timeFromLeftToNextGoal(summary, ana)).toBeUndefined();
+				expect(timeFromPlayerLeftToEnd(summary, ana)).toBeUndefined();
+				expect(timeFromPlayerLeftToNextGoal(summary, ana)).toBeUndefined();
 
 				const { tracker, match } = setup();
 				const onEnd = vi.fn();
@@ -662,7 +662,7 @@ describe('MatchTracker', () => {
 				match.players = match.players.filter((p) => p !== cid);
 				match.play(2);
 				match.end(0, [0, 0]);
-				expect(timeFromLeftToNextGoal(onEnd.mock.calls[0]![0], 'Steam|Cid|0:Cid')).toBeUndefined();
+				expect(timeFromPlayerLeftToNextGoal(onEnd.mock.calls[0]![0], 'Steam|Cid|0:Cid')).toBeUndefined();
 			});
 
 			it('adds regulation time and overtime on the clock', () => {
@@ -681,7 +681,7 @@ describe('MatchTracker', () => {
 				match.goal();
 				match.end(0, [1, 0]);
 				const summary: MatchSummary = onEnd.mock.calls[0]![0];
-				expect(timeFromLeftToNextGoal(summary, 'Steam|Cid|0:Cid')).toMatchObject({ clockSeconds: 15, secondsPlayed: 15 });
+				expect(timeFromPlayerLeftToNextGoal(summary, 'Steam|Cid|0:Cid')).toMatchObject({ clockSeconds: 15, secondsPlayed: 15 });
 				expect(summary.endMoment).toMatchObject({ clock: '+00:10', overtime: true });
 			});
 
