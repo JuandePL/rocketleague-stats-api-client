@@ -2,12 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import {
 	EsportsSeries,
 	type EsportsSeriesOptions,
+	findEventAfter,
 	getMvp,
 	getTeamTotals,
 	getTopPlayer,
 	MatchTracker,
+	timeBetween,
+	timeFromLeftTo,
+	timeFromLeftToEnd,
+	timeFromLeftToNextGoal,
 	type AnyEventListener,
 	type Game,
+	type MatchSummary,
 	type Player,
 	type StatsApiEvent,
 } from '../src/index.js';
@@ -503,6 +509,222 @@ describe('MatchTracker', () => {
 		expect(summary.scoreboard).toHaveLength(2);
 	});
 
+	describe('players who leave before the end (rage quit)', () => {
+		it('keeps their last scoreboard and tracked stats, flagged as leftEarly', () => {
+			const { tracker, match } = setup();
+			const onEnd = vi.fn();
+			tracker.onMatchEnd(onEnd);
+			const quitter = player('Cid', 1, { Score: 900, Goals: 3 });
+			match.players = [player('Ana', 0, { Score: 300 }), player('Bob', 1, { Score: 100 }), quitter];
+			match.start();
+			quitter.Boost = 100;
+			quitter.bOnGround = false;
+			quitter.bOnWall = false;
+			match.play(1);
+			quitter.Boost = 40;
+			match.play(2);
+			match.crossbar('Cid', -5100); // orange player on the blue goal: attack
+
+			match.players = match.players.filter((p) => p !== quitter); // rage quit
+			match.play(5);
+			match.end(0, [1, 3]);
+
+			const summary = onEnd.mock.calls[0]![0];
+			expect(summary.scoreboard.map((p: Player) => p.Name)).toEqual(['Ana', 'Bob']);
+			const cid = summary.playerResults.find((p: { Name: string }) => p.Name === 'Cid');
+			expect(cid).toMatchObject({
+				leftEarly: true,
+				PrimaryId: 'Steam|Cid|0',
+				team: 'Orange',
+				Score: 900,
+				Goals: 3,
+				boostUsed: 60,
+				crossbar: { attack: 1, defense: 0, total: 1 },
+				mvp: false,
+			});
+			expect(cid.airTime).toBeGreaterThan(0);
+			expect(summary.playerResults.find((p: { Name: string }) => p.Name === 'Ana')).toMatchObject({ leftEarly: false, mvp: true });
+			expect(summary.playerResults[0].Name).toBe('Cid'); // still sorted by score
+		});
+
+		it('records when the player left: clock, play time and date', () => {
+			const { tracker, match } = setup();
+			const onEnd = vi.fn();
+			tracker.onMatchEnd(onEnd);
+			const cid = player('Cid', 1);
+			match.players = [player('Ana', 0), cid];
+			match.clock = 160;
+			match.start();
+			match.play(5); // last seen at 2:35, after 5 s of play
+			match.players = match.players.filter((p) => p !== cid);
+			match.play(10);
+			match.end(0, [1, 0]);
+
+			const results = onEnd.mock.calls[0]![0].playerResults;
+			const left = results.find((p: { Name: string }) => p.Name === 'Cid');
+			expect(left.leftAt).toMatchObject({ timeSeconds: 155, overtime: false, clock: '2:35', secondsPlayed: 5 });
+			expect(left.leftAt.date).toBeInstanceOf(Date);
+			expect(results.find((p: { Name: string }) => p.Name === 'Ana')).not.toHaveProperty('leftAt');
+		});
+
+		it('records an overtime exit with the overtime clock', () => {
+			const { tracker, match } = setup();
+			const onEnd = vi.fn();
+			tracker.onMatchEnd(onEnd);
+			const cid = player('Cid', 1);
+			match.players = [player('Ana', 0), cid];
+			match.clock = 10;
+			match.start();
+			match.play(10);
+			match.startOvertime();
+			match.play(70); // +1:10
+			match.players = match.players.filter((p) => p !== cid);
+			match.play(5);
+			match.goal();
+			match.end(0, [1, 0]);
+
+			const left = onEnd.mock.calls[0]![0].playerResults.find((p: { Name: string }) => p.Name === 'Cid');
+			expect(left.leftAt).toMatchObject({ timeSeconds: 70, overtime: true, clock: '+1:10', secondsPlayed: 80 });
+		});
+
+		describe('time from leaving to the end, a goal or any event', () => {
+			/** Cid leaves at 2:35 (5 s played), a goal at 2:25, then the match ends at 2:05. */
+			function playWithQuit() {
+				const { tracker, match } = setup();
+				const onEnd = vi.fn();
+				tracker.onMatchEnd(onEnd);
+				const cid = player('Cid', 1);
+				match.players = [player('Ana', 0), cid];
+				match.clock = 160;
+				match.start();
+				match.play(5);
+				match.players = match.players.filter((p) => p !== cid);
+				match.play(10);
+				match.goal(); // fixture scorer is on blue
+				match.send(ev('CountdownBegin'));
+				match.frozen(3);
+				match.send(ev('RoundStarted'));
+				match.play(20);
+				match.end(0, [1, 0]);
+				const summary: MatchSummary = onEnd.mock.calls[0]![0];
+				return { summary, cid: summary.playerResults.find((p) => p.Name === 'Cid')! };
+			}
+
+			it('measures the time until the match ended', () => {
+				const { summary, cid } = playWithQuit();
+				expect(timeFromLeftToEnd(summary, cid)).toMatchObject({ secondsPlayed: 30, clockSeconds: 30 });
+				expect(timeFromLeftToEnd(summary, cid)!.realSeconds).toBeGreaterThanOrEqual(0);
+				expect(summary.endMoment).toMatchObject({ clock: '2:05', secondsPlayed: 35 });
+			});
+
+			it('measures the time until the next goal', () => {
+				const { summary, cid } = playWithQuit();
+				expect(timeFromLeftToNextGoal(summary, cid)).toMatchObject({ secondsPlayed: 10, clockSeconds: 10 });
+				expect(summary.goals).toHaveLength(1);
+				expect(summary.goals[0]!.moment.clock).toBe('2:25');
+			});
+
+			it('measures the time until any event, with an optional filter, by result or key', () => {
+				const { summary, cid } = playWithQuit();
+				expect(timeFromLeftTo(summary, cid.key, 'RoundStarted')).toMatchObject({ secondsPlayed: 10, clockSeconds: 10 });
+				// No goal by orange after Cid left.
+				expect(timeFromLeftTo(summary, cid, 'GoalScored', (e) => e.Data.Scorer.TeamNum === 1)).toBeUndefined();
+				expect(timeFromLeftTo(summary, cid, 'GoalScored', (e) => e.Data.Scorer.TeamNum === 0)).toMatchObject({ clockSeconds: 10 });
+				expect(findEventAfter(summary, cid.leftAt!, 'CountdownBegin')?.moment.clock).toBe('2:25');
+			});
+
+			it('returns undefined for players who stayed, or when there was no goal after leaving', () => {
+				const { summary } = playWithQuit();
+				const ana = summary.playerResults.find((p) => p.Name === 'Ana')!;
+				expect(timeFromLeftToEnd(summary, ana)).toBeUndefined();
+				expect(timeFromLeftToNextGoal(summary, ana)).toBeUndefined();
+
+				const { tracker, match } = setup();
+				const onEnd = vi.fn();
+				tracker.onMatchEnd(onEnd);
+				const cid = player('Cid', 1);
+				match.players = [player('Ana', 0), cid];
+				match.start();
+				match.play(2);
+				match.players = match.players.filter((p) => p !== cid);
+				match.play(2);
+				match.end(0, [0, 0]);
+				expect(timeFromLeftToNextGoal(onEnd.mock.calls[0]![0], 'Steam|Cid|0:Cid')).toBeUndefined();
+			});
+
+			it('adds regulation time and overtime on the clock', () => {
+				const { tracker, match } = setup();
+				const onEnd = vi.fn();
+				tracker.onMatchEnd(onEnd);
+				const cid = player('Cid', 1);
+				match.players = [player('Ana', 0), cid];
+				match.clock = 10;
+				match.start();
+				match.play(5); // leaves at 0:05
+				match.players = match.players.filter((p) => p !== cid);
+				match.play(5);
+				match.startOvertime();
+				match.play(10); // +0:10
+				match.goal();
+				match.end(0, [1, 0]);
+				const summary: MatchSummary = onEnd.mock.calls[0]![0];
+				expect(timeFromLeftToNextGoal(summary, 'Steam|Cid|0:Cid')).toMatchObject({ clockSeconds: 15, secondsPlayed: 15 });
+				expect(summary.endMoment).toMatchObject({ clock: '+0:10', overtime: true });
+			});
+
+			it('keeps a timeline of every event except UpdateState, and timeBetween goes both ways', () => {
+				const { summary, cid } = playWithQuit();
+				const names = summary.timeline.map((entry) => entry.event.Event);
+				expect(names[0]).toBe('MatchInitialized');
+				expect(names.at(-1)).toBe('MatchEnded');
+				expect(names).not.toContain('UpdateState');
+				expect(timeBetween(summary.endMoment, cid.leftAt!)).toMatchObject({ secondsPlayed: -30, clockSeconds: -30 });
+			});
+		});
+
+		it('never makes a player who left the MVP, even with the best score on the winning team', () => {
+			const { tracker, match } = setup();
+			const onEnd = vi.fn();
+			tracker.onMatchEnd(onEnd);
+			const quitter = player('Cid', 0, { Score: 900 });
+			match.players = [player('Ana', 0, { Score: 300 }), quitter, player('Bob', 1)];
+			match.start();
+			match.play(2);
+			match.players = match.players.filter((p) => p !== quitter);
+			match.play(2);
+			match.end(0, [1, 0]);
+			expect(onEnd.mock.calls[0]![0].mvp.Name).toBe('Ana');
+		});
+
+		it('counts a player who leaves and comes back once, not as having left', () => {
+			const { tracker, match } = setup();
+			const onEnd = vi.fn();
+			tracker.onMatchEnd(onEnd);
+			const ana = player('Ana', 0);
+			const bob = player('Bob', 1);
+			match.players = [ana, bob];
+			match.start();
+			match.players = [ana];
+			match.play(3); // Bob disconnected
+			match.players = [ana, bob];
+			match.play(3); // Bob is back
+			match.end(0, [1, 0]);
+			const results = onEnd.mock.calls[0]![0].playerResults;
+			expect(results).toHaveLength(2);
+			expect(results.find((p: { Name: string }) => p.Name === 'Bob').leftEarly).toBe(false);
+		});
+	});
+
+	it('stores the PrimaryId of every player in the stats', () => {
+		const { tracker, match } = setup();
+		match.start();
+		match.players[0]!.Boost = 50;
+		match.play(1);
+		const stats = tracker.getStats();
+		expect(stats.players.map((p) => p.PrimaryId)).toEqual(['Steam|Ana|0', 'Steam|Bob|0']);
+		expect(stats.boost.players.map((p) => p.PrimaryId)).toEqual(['Steam|Ana|0', 'Steam|Bob|0']);
+	});
+
 	it('attaches to a client through onAny', () => {
 		let listener: AnyEventListener | undefined;
 		const unsubscribe = vi.fn();
@@ -680,6 +902,26 @@ describe('EsportsSeries', () => {
 		expect(ana.airTime).toBeCloseTo(airPerMatch[0]! + airPerMatch[1]!);
 		expect(ana.airTime).toBeGreaterThan(15);
 		expect(result.players.find((p) => p.Name === 'Bob')?.airTime).toBe(0);
+	});
+
+	it('counts matches a player left early, with their stats and PrimaryId', () => {
+		const { series, match } = setup({ games: 2, format: 'play-all' });
+		const playMatch = (cidQuits: boolean) => {
+			const cid = player('Cid', 1, { Score: 200, Goals: 1 });
+			match.players = [player('Ana', 0, { Score: 400 }), cid];
+			match.start();
+			match.play(3);
+			if (cidQuits) match.players = match.players.filter((p) => p !== cid);
+			match.play(3);
+			match.end(0, [2, 1]);
+		};
+		playMatch(true);
+		playMatch(false);
+
+		const cid = series.getResult().players.find((p) => p.Name === 'Cid')!;
+		expect(cid).toMatchObject({ PrimaryId: 'Steam|Cid|0', matches: 2, leftEarly: 1, Score: 400, Goals: 2 });
+		expect(series.matches[0]!.playerResults.find((p) => p.Name === 'Cid')?.leftEarly).toBe(true);
+		expect(series.getResult().players.find((p) => p.Name === 'Ana')).toMatchObject({ PrimaryId: 'Steam|Ana|0', leftEarly: 0 });
 	});
 
 	it('plays every game with the play-all format', () => {

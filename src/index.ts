@@ -11,6 +11,7 @@ export * from './sort.js';
 export * from './stats/helpers.js';
 export * from './stats/match.js';
 export * from './stats/esports.js';
+export * from './stats/timing.js';
 export * from './errors.js';
 export * from './client.js';
 export type { EnsureStatsApiOptions, EnsureStatsApiResult } from './node/config.js';

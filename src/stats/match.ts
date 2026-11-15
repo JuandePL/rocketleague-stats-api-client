@@ -1,6 +1,6 @@
 import type { AnyEventListener, Unsubscribe } from '../client.js';
 import type { Game, GameTeam, Player, PlayerRef, TeamNum } from '../types/common.js';
-import type { StatsApiEvent } from '../types/events.js';
+import type { EventName, GoalScoredData, StatsApiEvent, StatsApiEventOf } from '../types/events.js';
 import { getMvp, playerKey, teamName, teamSide, toPercent, TOTAL_STATS, type TeamSplit } from './helpers.js';
 
 /** Anything that delivers every game event, such as `RocketLeagueStatsClient`. */
@@ -12,6 +12,8 @@ export interface StatsEventSource {
 export interface PlayerBoostUsage {
 	/** See {@link playerKey}. */
 	key: string;
+	/** Platform id in the format `Platform|Uid|Splitscreen` (e.g. `"Steam|123|0"`). Empty if never seen in `UpdateState`. */
+	PrimaryId: string;
 	Name: string;
 	Shortcut: number;
 	TeamNum: TeamNum;
@@ -41,13 +43,55 @@ export interface TrackedPlayerStats extends PlayerBoostUsage {
 	crossbar: CrossbarHits;
 }
 
-/** Everything about one player in one match: the final scoreboard plus the tracked stats. */
+/** A point in time during a match. Compare two of them with `timeBetween()`. */
+export interface MatchMoment {
+	/** Order of the moment in the match: increases with every event received. */
+	sequence: number;
+	/** Match clock: seconds remaining, or seconds into overtime when `overtime` is `true`. */
+	timeSeconds: number;
+	overtime: boolean;
+	/** The clock as the game shows it: `"2:35"` remaining, or `"+1:10"` in overtime. */
+	clock: string;
+	/** Seconds of play tracked until then (same measure as `MatchStats.secondsPlayed`). */
+	secondsPlayed: number;
+	/** Wall-clock time. */
+	date: Date;
+}
+
+/** When a player left: the last `UpdateState` they were in. */
+export type LeftAt = MatchMoment;
+
+/** One event of the match with the moment it arrived. Narrow it with `entry.event.Event`. */
+export type TimelineEntry<E extends EventName = EventName> = {
+	[K in E]: { event: StatsApiEventOf<K>; moment: MatchMoment };
+}[E];
+
+/** A goal of the match with the moment it was scored. */
+export interface GoalRecord {
+	moment: MatchMoment;
+	data: GoalScoredData;
+}
+
+/** Formats the match clock like the game: `"2:35"`, or `"+1:10"` in overtime. */
+export function formatMatchClock(timeSeconds: number, overtime = false): string {
+	const total = Math.max(0, Math.round(timeSeconds));
+	const clock = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+	return overtime ? `+${clock}` : clock;
+}
+
+/**
+ * Everything about one player in one match: the scoreboard plus the tracked stats.
+ * Players who left before the end keep the stats they had when they were last seen.
+ */
 export interface MatchPlayerResult extends TrackedPlayerStats {
-	PrimaryId: string;
 	/** Name of the player's team (`Game.Teams[].Name`). */
 	team: string;
-	/** `true` for the match MVP. */
+	/** `true` for the match MVP. Players who left before the end can't be MVP. */
 	mvp: boolean;
+	/** `true` if the player was no longer in the match when it ended (left, rage quit, disconnected). */
+	leftEarly: boolean;
+	/** When the player was last seen in the match. Only set when `leftEarly` is `true`. */
+	leftAt?: LeftAt;
 	Score: number;
 	Goals: number;
 	Shots: number;
@@ -79,13 +123,22 @@ export interface MatchSummary extends MatchStats {
 	teams: GameTeam[];
 	winnerTeamNum: TeamNum;
 	overtime: boolean;
-	/** Final scoreboard of every player, as sent by the game (last `UpdateState`). */
+	/** Final scoreboard, as sent by the game (last `UpdateState`). Players who left are not in it. */
 	scoreboard: Player[];
-	/** Every player of the final scoreboard with their tracked stats, sorted by score. */
+	/**
+	 * Every player seen during the match, sorted by score: the final scoreboard, plus the players
+	 * who left before the end (`leftEarly: true`) with the stats they had when they left.
+	 */
 	playerResults: MatchPlayerResult[];
 	/** Highest score on the winning team. See {@link getMvp}. */
 	mvp: MatchPlayerResult | undefined;
 	endedAt: Date;
+	/** The moment the match ended (`MatchEnded`). */
+	endMoment: MatchMoment;
+	/** Every goal, in order. */
+	goals: GoalRecord[];
+	/** Every event of the match except `UpdateState`, in order, from `MatchInitialized` to `MatchEnded`. */
+	timeline: TimelineEntry[];
 }
 
 export type MatchEndListener = (summary: MatchSummary) => void;
@@ -95,6 +148,7 @@ const MAX_CLOCK_STEP = 5;
 
 interface PlayerAccumulator {
 	key: string;
+	PrimaryId: string;
 	Name: string;
 	Shortcut: number;
 	TeamNum: TeamNum;
@@ -103,14 +157,18 @@ interface PlayerAccumulator {
 	wallTicks: number;
 	crossbar: CrossbarHits;
 	lastBoost: { boost: number; demolished: boolean } | undefined;
+	/** Last `UpdateState` entry of the player: their scoreboard if they leave before the end. */
+	lastSeen: Player | undefined;
+	/** When `lastSeen` was recorded. */
+	lastSeenAt: MatchMoment | undefined;
 }
 
-/** `true` when the car is airborne (only known while spectating). */
 /** `true` when the car is driving on a wall (only known while spectating). */
 function isOnWall(player: Player): boolean {
 	return player.bHasCar !== false && player.bDemolished !== true && player.bOnWall === true;
 }
 
+/** `true` when the car is airborne (only known while spectating). */
 function isInAir(player: Player): boolean {
 	return player.bHasCar !== false && player.bDemolished !== true && player.bOnGround === false && player.bOnWall === false;
 }
@@ -146,6 +204,8 @@ export class MatchTracker {
 	#secondsPlayed = 0;
 	#possessionTicks: TeamSplit = { blue: 0, orange: 0 };
 	#players = new Map<string, PlayerAccumulator>();
+	#timeline: TimelineEntry[] = [];
+	#sequence = 0;
 
 	/** Pass a client to start tracking right away, or call {@link handle} with events yourself. */
 	constructor(source?: StatsEventSource) {
@@ -197,10 +257,39 @@ export class MatchTracker {
 		this.#secondsPlayed = 0;
 		this.#possessionTicks = { blue: 0, orange: 0 };
 		this.#players.clear();
+		this.#timeline = [];
+	}
+
+	/** Events of the current match so far (except `UpdateState`), with the moment each one arrived. */
+	getTimeline(): TimelineEntry[] {
+		return [...this.#timeline];
+	}
+
+	/** The current moment of the match. */
+	getMoment(): MatchMoment {
+		return this.#moment(this.#lastGame);
+	}
+
+	#moment(game: Game | undefined): MatchMoment {
+		const timeSeconds = game?.TimeSeconds ?? 0;
+		const overtime = game?.bOvertime ?? false;
+		return {
+			sequence: this.#sequence,
+			timeSeconds,
+			overtime,
+			clock: formatMatchClock(timeSeconds, overtime),
+			secondsPlayed: this.#secondsPlayed,
+			date: new Date(),
+		};
 	}
 
 	/** Feeds one event. Called automatically for the attached client. */
 	handle(event: StatsApiEvent): void {
+		this.#sequence++;
+		// A new match clears the timeline, so it is recorded after the reset.
+		const startsMatch = event.Event === 'MatchCreated' || event.Event === 'MatchInitialized';
+		if (!startsMatch) this.#record(event);
+
 		switch (event.Event) {
 			case 'MatchCreated':
 			case 'MatchInitialized':
@@ -230,6 +319,14 @@ export class MatchTracker {
 				if (!this.#ended) this.#end(event.Data.WinnerTeamNum);
 				break;
 		}
+
+		if (startsMatch) this.#record(event);
+	}
+
+	#record(event: StatsApiEvent): void {
+		if (event.Event === 'UpdateState' || this.#ended) return;
+		// The union of events and the union of entries line up one to one; TypeScript can't see that.
+		this.#timeline.push({ event, moment: this.#moment(this.#lastGame) } as TimelineEntry);
 	}
 
 	/** `false` while paused, during goal replays and after the match ended. */
@@ -243,6 +340,7 @@ export class MatchTracker {
 		if (!entry) {
 			entry = {
 				key,
+				PrimaryId: player.PrimaryId ?? '',
 				Name: player.Name,
 				Shortcut: player.Shortcut,
 				TeamNum: player.TeamNum,
@@ -251,10 +349,13 @@ export class MatchTracker {
 				wallTicks: 0,
 				crossbar: { attack: 0, defense: 0, total: 0 },
 				lastBoost: undefined,
+				lastSeen: undefined,
+				lastSeenAt: undefined,
 			};
 			this.#players.set(key, entry);
 		}
 		entry.TeamNum = player.TeamNum;
+		if (player.PrimaryId) entry.PrimaryId = player.PrimaryId;
 		return entry;
 	}
 
@@ -274,12 +375,21 @@ export class MatchTracker {
 		this.#lastGame = game;
 		this.#lastPlayers = players;
 		this.#matchGuid = matchGuid ?? this.#matchGuid;
-		if (game.bReplay) return; // goal replays repeat old ticks
 
+		// Remember every player's latest scoreboard, so it survives if they leave.
+		const entries = players.map((player) => [player, this.#accumulator(player)] as const);
+		const seenAt = this.#moment(game);
+		for (const [player, entry] of entries) {
+			entry.lastSeen = player;
+			entry.lastSeenAt = seenAt;
+		}
+		if (!game.bReplay) this.#count(game, entries); // goal replays repeat old ticks
+		seenAt.secondsPlayed = this.#secondsPlayed; // including this tick
+	}
+
+	#count(game: Game, entries: ReadonlyArray<readonly [Player, PlayerAccumulator]>): void {
 		const clockStep = this.#lastClock === undefined ? 0 : Math.abs(game.TimeSeconds - this.#lastClock);
 		this.#lastClock = game.TimeSeconds;
-
-		const entries = players.map((player) => [player, this.#accumulator(player)] as const);
 
 		// Paused: nothing is counted. Boost values are still recorded so nothing jumps on unpause.
 		for (const [player, entry] of entries) this.#trackBoost(player, entry, !this.#paused);
@@ -316,6 +426,7 @@ export class MatchTracker {
 
 		const players: TrackedPlayerStats[] = [...this.#players.values()].map((entry) => ({
 			key: entry.key,
+			PrimaryId: entry.PrimaryId,
 			Name: entry.Name,
 			Shortcut: entry.Shortcut,
 			TeamNum: entry.TeamNum,
@@ -337,7 +448,14 @@ export class MatchTracker {
 				percent: toPercent(this.#possessionTicks),
 			},
 			boost: {
-				players: players.map(({ key, Name, Shortcut, TeamNum, boostUsed }) => ({ key, Name, Shortcut, TeamNum, boostUsed })),
+				players: players.map(({ key, PrimaryId, Name, Shortcut, TeamNum, boostUsed }) => ({
+					key,
+					PrimaryId,
+					Name,
+					Shortcut,
+					TeamNum,
+					boostUsed,
+				})),
 				teams: boostTeams,
 			},
 			players,
@@ -357,8 +475,15 @@ export class MatchTracker {
 			return mvp ? playerKey(mvp) : undefined;
 		})();
 
-		const playerResults: MatchPlayerResult[] = scoreboard
-			.map((player) => {
+		// Players who left before the end keep their last known scoreboard (anti rage quit).
+		const present = new Set(scoreboard.map((player) => playerKey(player)));
+		const left = [...this.#players.values()].flatMap((entry) =>
+			entry.lastSeen && !present.has(entry.key) ? [{ player: entry.lastSeen, leftEarly: true, leftAt: entry.lastSeenAt }] : [],
+		);
+		const everyone = [...scoreboard.map((player) => ({ player, leftEarly: false, leftAt: undefined })), ...left];
+
+		const playerResults: MatchPlayerResult[] = everyone
+			.map(({ player, leftEarly, leftAt }) => {
 				const key = playerKey(player);
 				const own = tracked.get(key);
 				const result: MatchPlayerResult = {
@@ -369,6 +494,8 @@ export class MatchTracker {
 					TeamNum: player.TeamNum,
 					team: teamName(teams, player.TeamNum),
 					mvp: key === mvpKey,
+					leftEarly,
+					...(leftAt ? { leftAt: { ...leftAt } } : {}),
 					Score: 0,
 					Goals: 0,
 					Shots: 0,
@@ -398,6 +525,11 @@ export class MatchTracker {
 			playerResults,
 			mvp: playerResults.find((player) => player.mvp),
 			endedAt: new Date(),
+			endMoment: this.#timeline.at(-1)?.moment ?? this.getMoment(),
+			goals: this.#timeline.flatMap((entry) =>
+				entry.event.Event === 'GoalScored' ? [{ moment: entry.moment, data: entry.event.Data }] : [],
+			),
+			timeline: [...this.#timeline],
 		};
 		for (const listener of [...this.#matchEndListeners]) listener(summary);
 	}

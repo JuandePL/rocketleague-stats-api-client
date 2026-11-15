@@ -45,10 +45,15 @@ export interface SeriesTeamResult {
 export interface SeriesPlayerResult {
 	/** See {@link playerKey}. */
 	key: string;
+	/** Platform id in the format `Platform|Uid|Splitscreen` (e.g. `"Steam|123|0"`). */
+	PrimaryId: string;
 	Name: string;
 	/** Name of the team the player played for in their last match. */
 	team: string;
+	/** Matches played, including the ones they left before the end. */
 	matches: number;
+	/** Matches the player left before the end (rage quit, disconnect). Their stats until then are counted. */
+	leftEarly: number;
 	/** Matches in which the player was the MVP. */
 	mvps: number;
 	Score: number;
@@ -248,9 +253,11 @@ export class EsportsSeries {
 				if (!total) {
 					total = {
 						key: result.key,
+						PrimaryId: result.PrimaryId,
 						Name: result.Name,
 						team: result.team,
 						matches: 0,
+						leftEarly: 0,
 						mvps: 0,
 						Score: 0,
 						Goals: 0,
@@ -269,7 +276,9 @@ export class EsportsSeries {
 				}
 				total.team = result.team;
 				total.matches++;
+				if (result.leftEarly) total.leftEarly++;
 				if (result.mvp) total.mvps++;
+				if (result.PrimaryId) total.PrimaryId = result.PrimaryId;
 				for (const stat of TOTAL_STATS) total[stat] += result[stat];
 				total.boostUsed += result.boostUsed;
 				total.airTime += result.airTime;

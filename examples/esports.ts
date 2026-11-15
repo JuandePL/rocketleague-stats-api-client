@@ -24,6 +24,8 @@ import {
 	type MatchPlayerResult,
 	type SeriesOptions,
 	type SeriesPlayerResult,
+	timeFromLeftToEnd,
+	timeFromLeftToNextGoal,
 } from '../src/index.js';
 
 /** Reads the series settings from the command line. */
@@ -52,6 +54,12 @@ function printPlayer(player: MatchPlayerResult | SeriesPlayerResult, extra = '')
 	);
 }
 
+/** Games, MVPs, matches left early and platform id of a player over the series. */
+function seriesExtra(player: SeriesPlayerResult): string {
+	const left = player.leftEarly > 0 ? `, left ${player.leftEarly} early` : '';
+	return `  ${player.matches} games, ${player.mvps} MVPs${left}  [${player.PrimaryId || 'no id'}]`;
+}
+
 const options = parseArgs(process.argv.slice(2));
 
 const client = new RocketLeagueStatsClient();
@@ -73,14 +81,23 @@ series.onMatchEnd((match, result) => {
 	console.log(`  Possession: blue ${pct(match.possession.percent.blue)} / orange ${pct(match.possession.percent.orange)}`);
 	console.log(`  Boost used: blue ${match.boost.teams.blue.toFixed(0)} / orange ${match.boost.teams.orange.toFixed(0)}`);
 	console.log('  Players:');
-	for (const player of match.playerResults) printPlayer(player, player.mvp ? '  MVP' : '');
+	for (const player of match.playerResults) {
+		let left = '';
+		if (player.leftAt) {
+			const toEnd = timeFromLeftToEnd(match, player);
+			const toGoal = timeFromLeftToNextGoal(match, player);
+			left = `  LEFT at ${player.leftAt.clock}, ${Math.round(toEnd?.clockSeconds ?? 0)} s before the end`;
+			left += toGoal ? `, ${Math.round(toGoal.clockSeconds)} s before the next goal` : ', no goal after';
+		}
+		printPlayer(player, player.mvp ? '  MVP' : left);
+	}
 	console.log(`  Series: ${result.teams.map((team) => `${team.name} ${team.wins}`).join(' - ')}`);
 });
 
 series.onSeriesEnd((result) => {
 	console.log(`\n${result.winner ?? 'Nobody'} wins the series. Series MVP: ${result.mvp?.Name ?? '-'}`);
 	console.log('  Players (whole series):');
-	for (const player of result.players) printPlayer(player, `  ${player.matches} games, ${player.mvps} MVPs`);
+	for (const player of result.players) printPlayer(player, seriesExtra(player));
 	if (series.autoStart) console.log('  A new series starts with the next match.');
 });
 
@@ -104,7 +121,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 			series.stop();
 			const result = series.getResult();
 			console.log(`Series stopped after ${result.matches.length} games. ${result.teams.map((t) => `${t.name} ${t.wins}`).join(' - ')}`);
-			for (const player of result.players) printPlayer(player, `  ${player.matches} games, ${player.mvps} MVPs`);
+			for (const player of result.players) printPlayer(player, seriesExtra(player));
 			return;
 		}
 		default:

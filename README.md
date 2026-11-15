@@ -194,7 +194,37 @@ tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possessio
 
 Only time with the ball in play counts. Kickoff countdowns and goal replays are excluded, and overtime is counted. **While the match is paused (`MatchPaused` until `MatchUnpaused`), everything is frozen:** time, possession, boost usage, air time, wall time and crossbar hits. Check `tracker.paused` to know if it is paused. The tracker resets on its own when a new match starts.
 
-When the match ends, it gives you a `MatchSummary` with the teams, the winner and the MVP. Its `playerResults` has one entry per player: the scoreboard (`Score`, `Goals`, `Assists`, `Saves`, `Shots`, …), `team`, `mvp`, `boostUsed`, `airTime`, `onWallTime` and `crossbar`. The raw scoreboard sent by the game is in `scoreboard`.
+When the match ends, it gives you a `MatchSummary` with the teams, the winner and the MVP. Its `playerResults` has one entry per player: `PrimaryId`, the scoreboard (`Score`, `Goals`, `Assists`, `Saves`, `Shots`, …), `team`, `mvp`, `leftEarly`, `boostUsed`, `airTime`, `onWallTime` and `crossbar`. The raw scoreboard sent by the game is in `scoreboard`.
+
+**Players who leave before the end (rage quit, disconnect)** stay in `playerResults` with `leftEarly: true` and the stats they had when they were last seen. They can't be MVP. A player who leaves and comes back before the end counts as a normal player.
+
+`leftAt` tells when they left:
+- `clock`: the match clock as the game shows it, like `"2:35"`, or `"+1:10"` in overtime.
+- `timeSeconds` and `overtime`: the same clock as raw values.
+- `secondsPlayed`: seconds of play until then.
+- `date`: the real time.
+
+`formatMatchClock(timeSeconds, overtime)` formats any clock value the same way.
+
+#### Time between a player leaving and the end, a goal, or any event
+
+```ts
+import { timeFromLeftToEnd, timeFromLeftToNextGoal, timeFromLeftTo, timeBetween } from '@juande_pl/rocketleague-stats-api-client';
+
+timeFromLeftToEnd(summary, player);        // { secondsPlayed, clockSeconds, realSeconds } until the match ended
+timeFromLeftToNextGoal(summary, player);   // until the next goal, by any team
+timeFromLeftTo(summary, player, 'GoalScored', (e) => e.Data.Scorer.TeamNum !== player.TeamNum); // until their team conceded
+timeFromLeftTo(summary, player, 'StatfeedEvent', (e) => e.Data.EventName === 'Save');              // any event, with an optional filter
+timeBetween(summary.goals[0].moment, summary.endMoment);                                           // any two moments
+```
+
+- **Return value:** `undefined` if the player didn't leave early, or if no such event happened after they left.
+- **`player`:** a `MatchPlayerResult` or its `key`.
+- **The three measures:**
+  - `secondsPlayed`: play time only. Countdowns, replays and pauses are left out.
+  - `clockSeconds`: time on the match clock. Regulation time and overtime add up.
+  - `realSeconds`: real time.
+- **Where the moments come from:** every `MatchSummary` has `endMoment`, `goals` (each with its `moment`) and `timeline`. The timeline holds every event of the match except `UpdateState`, each with the moment it arrived. Live, use `tracker.getTimeline()` and `tracker.getMoment()`.
 
 > **Limitations:**
 > - There is no field domination (time the ball spends in each half): `UpdateState` doesn't send the ball position. It will be added if a future Stats API update includes it.
@@ -237,7 +267,7 @@ series.tracker.getStats();                        // live stats of the current m
 
 - **Teams are identified by name** (`Game.Teams[].Name`), so they can switch sides between matches. Give them distinct names in the private match settings.
 - **Per-team results** include wins, goals, boost used and possession over the whole series.
-- **Per-player results** (`result.players`) include the summed scoreboard stats, boost used, air time, wall time, crossbar hits (attack and defense), matches played and the number of MVPs.
+- **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, crossbar hits (attack and defense), matches played, matches left early (`leftEarly`) and the number of MVPs.
 - **Per-match player results:** each match in `result.matches` keeps its own `playerResults`.
 - **Which matches count:** only matches that end (`MatchEnded`) while the series is running are recorded.
 - **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match ends. That match then becomes the first of the new series.
