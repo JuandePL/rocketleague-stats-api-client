@@ -243,6 +243,7 @@ export class MatchTracker {
 	#sawRoundStart = false;
 	#paused = false;
 	#ended = false;
+	#winnerTeamNum: TeamNum | undefined;
 	#lastClock: number | undefined;
 	#lastGame: Game | undefined;
 	#lastPlayers: Player[] = [];
@@ -295,6 +296,33 @@ export class MatchTracker {
 		return this.#ended;
 	}
 
+	/** `true` while a match is being tracked: an `UpdateState` was received and `MatchEnded` wasn't. */
+	get matchInProgress(): boolean {
+		return this.#lastGame !== undefined && !this.#ended;
+	}
+
+	/** Teams of the current match with their score, ordered by `TeamNum`. Empty before the first `UpdateState`. */
+	getTeams(): GameTeam[] {
+		const game = this.#lastGame;
+		return game ? [...game.Teams].sort((a, b) => a.TeamNum - b.TeamNum).map((team) => ({ ...team })) : [];
+	}
+
+	/**
+	 * Live results of every player seen in the current match, sorted by score: the same shape as
+	 * `MatchSummary.playerResults`, with the latest scoreboard and the tracked stats together.
+	 * Can be called at any time, for example on every `UpdateState`.
+	 *
+	 * While the match is running, `mvp` marks the provisional MVP (best player of the leading team,
+	 * or of everyone on a tie) and `leftEarly` marks players who are not in the match right now.
+	 * After `MatchEnded`, it gives the final results.
+	 */
+	getPlayerResults(): MatchPlayerResult[] {
+		const teams = this.getTeams();
+		const [blue, orange] = teams;
+		const leader = blue && orange && blue.Score !== orange.Score ? (blue.Score > orange.Score ? blue : orange).TeamNum : undefined;
+		return this.#playerResults(this.#ended ? this.#winnerTeamNum : leader, this.getStats(), teams);
+	}
+
 	/** Called with the final stats when a match ends. Returns a function that removes the listener. */
 	onMatchEnd(listener: MatchEndListener): Unsubscribe {
 		this.#matchEndListeners.add(listener);
@@ -307,6 +335,7 @@ export class MatchTracker {
 		this.#sawRoundStart = false;
 		this.#paused = false;
 		this.#ended = false;
+		this.#winnerTeamNum = undefined;
 		this.#lastClock = undefined;
 		this.#lastGame = undefined;
 		this.#lastPlayers = [];
@@ -537,11 +566,37 @@ export class MatchTracker {
 
 	#end(winnerTeamNum: TeamNum): void {
 		this.#ended = true;
+		this.#winnerTeamNum = winnerTeamNum;
 		this.#roundActive = false;
 		const game = this.#lastGame;
-		const teams = game ? [...game.Teams].sort((a, b) => a.TeamNum - b.TeamNum).map((team) => ({ ...team })) : [];
+		const teams = this.getTeams();
 		const scoreboard = [...this.#lastPlayers];
 		const stats = this.getStats();
+		const playerResults = this.#playerResults(winnerTeamNum, stats, teams);
+
+		const summary: MatchSummary = {
+			...stats,
+			matchGuid: this.#matchGuid,
+			arena: game?.Arena,
+			teams,
+			winnerTeamNum,
+			overtime: game?.bOvertime ?? false,
+			scoreboard,
+			playerResults,
+			mvp: playerResults.find((player) => player.mvp),
+			endedAt: new Date(),
+			endMoment: this.#timeline.at(-1)?.moment ?? this.getMoment(),
+			goals: this.#timeline.flatMap((entry) =>
+				entry.event.Event === 'GoalScored' ? [{ moment: entry.moment, data: entry.event.Data }] : [],
+			),
+			timeline: [...this.#timeline],
+		};
+		for (const listener of [...this.#matchEndListeners]) listener(summary);
+	}
+
+	/** Scoreboard of the last `UpdateState` plus the players who left, merged with the tracked stats. */
+	#playerResults(winnerTeamNum: TeamNum | undefined, stats: MatchStats, teams: GameTeam[]): MatchPlayerResult[] {
+		const scoreboard = this.#lastPlayers;
 		const tracked = new Map(stats.players.map((player) => [player.key, player]));
 		const mvpKey = (() => {
 			const mvp = getMvp(scoreboard, winnerTeamNum);
@@ -555,7 +610,7 @@ export class MatchTracker {
 		);
 		const everyone = [...scoreboard.map((player) => ({ player, leftEarly: false, leftAt: undefined })), ...left];
 
-		const playerResults: MatchPlayerResult[] = everyone
+		return everyone
 			.map(({ player, leftEarly, leftAt }) => {
 				const key = this.#identify(player);
 				const own = tracked.get(key);
@@ -589,24 +644,5 @@ export class MatchTracker {
 				return result;
 			})
 			.sort((a, b) => b.Score - a.Score);
-
-		const summary: MatchSummary = {
-			...stats,
-			matchGuid: this.#matchGuid,
-			arena: game?.Arena,
-			teams,
-			winnerTeamNum,
-			overtime: game?.bOvertime ?? false,
-			scoreboard,
-			playerResults,
-			mvp: playerResults.find((player) => player.mvp),
-			endedAt: new Date(),
-			endMoment: this.#timeline.at(-1)?.moment ?? this.getMoment(),
-			goals: this.#timeline.flatMap((entry) =>
-				entry.event.Event === 'GoalScored' ? [{ moment: entry.moment, data: entry.event.Data }] : [],
-			),
-			timeline: [...this.#timeline],
-		};
-		for (const listener of [...this.#matchEndListeners]) listener(summary);
 	}
 }

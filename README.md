@@ -191,6 +191,7 @@ import { MatchTracker } from '@juande_pl/rocketleague-stats-api-client';
 
 const tracker = new MatchTracker(client);
 const stats = tracker.getStats(); // any time during the match
+const live = tracker.getPlayerResults(); // live scoreboard + tracked stats per player
 tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possession.percent));
 ```
 
@@ -206,6 +207,8 @@ tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possessio
 Only time with the ball in play counts. Kickoff countdowns and goal replays are excluded, and overtime is counted. **While the match is paused (`MatchPaused` until `MatchUnpaused`), everything is frozen:** time, possession, boost usage, air time, wall time, speed and crossbar hits. Check `tracker.paused` to know if it is paused. The tracker resets on its own when a new match starts.
 
 When the match ends, it gives you a `MatchSummary` with the teams, the winner and the MVP. Its `playerResults` has one entry per player: `PrimaryId`, the scoreboard (`Score`, `Goals`, `Assists`, `Saves`, `Shots`, …), `team`, `mvp`, `leftEarly`, `boostUsed`, `airTime`, `onWallTime`, `averageSpeed`, `drivingTime` and `crossbar`. The raw scoreboard sent by the game is in `scoreboard`.
+
+**Live player results:** `tracker.getPlayerResults()` gives the same entries as `playerResults` at any time, so you can show them on every `UpdateState`. While the match is running, `mvp` marks the provisional MVP (best player of the leading team, or of everyone on a tie) and `leftEarly` marks players who are not in the match right now. `tracker.matchInProgress` tells if a match is being tracked.
 
 **Players who leave before the end (rage quit, disconnect)** stay in `playerResults` with `leftEarly: true` and the stats they had when they were last seen. They can't be MVP. A player who leaves and comes back before the end counts as a normal player.
 
@@ -262,6 +265,7 @@ series.start({ games: 3, format: 'play-all' });   // plays all 3 matches
 series.stop();                                    // stops recording, keeps the results
 series.restart();                                 // same options, clears the stored matches
 series.getResult();                               // standings at any time (check `finished`)
+series.getLiveResult();                           // the same, also counting the match being played
 series.tracker.getStats();                        // live stats of the current match
 ```
 
@@ -271,7 +275,8 @@ series.tracker.getStats();                        // live stats of the current m
 | `start({ games, format })` | Starts a series. Clears any stored matches. `format`: `'best-of'` (default) or `'play-all'`. |
 | `restart()`            | Starts again with the same options. Clears the stored matches.                                |
 | `stop()`               | Stops recording, and the automatic restart until the next `start()` or `restart()`. The matches played so far stay in `getResult()`. |
-| `getResult()`          | `{ status, finished, matches, teams, winner, players, mvp }`                                  |
+| `getResult()`          | `{ status, finished, matches, teams, winner, players, mvp }`, with the finished matches.      |
+| `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. Cheap enough for every `UpdateState`. |
 | `status`               | `'idle'`, `'running'`, `'finished'` or `'stopped'`.                                           |
 | `onSeriesStart` / `onMatchEnd` / `onSeriesEnd` | Listeners. `onSeriesStart` also fires on automatic restarts. Each returns an unsubscribe function. |
 | `dispose()`            | Stops listening to the client.                                                                 |

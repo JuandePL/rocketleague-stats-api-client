@@ -13,6 +13,7 @@
  *   all <N>   start a new series where all N matches are played.
  *   r         restart the series with the same settings.
  *   s         stop the series and show the results so far (no automatic restart until "r" or "bo").
+ *   l         show the live series totals, including the match being played.
  *
  * Requires Rocket League running with the Stats API enabled (see README).
  * Spectate the matches to get boost usage, speed and air time (those fields are only sent to spectators).
@@ -72,7 +73,7 @@ const series = new EsportsSeries(client, options);
 
 client.on('connect', () => {
 	const state = series.status === 'idle' ? 'waiting for "bo <N>" or "all <N>"' : `recording ${describe(series.getResult().options)}`;
-	console.log(`Connected, ${state}. Commands: "bo <N>", "all <N>", "r", "s".`);
+	console.log(`Connected, ${state}. Commands: "bo <N>", "all <N>", "r", "s", "l".`);
 });
 
 series.onSeriesStart((settings) => console.log(`\n=== New series: ${describe(settings)} ===`));
@@ -128,7 +129,14 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 			for (const player of result.players) printPlayer(player, seriesExtra(player));
 			return;
 		}
+		case 'l': {
+			const live = series.getLiveResult();
+			const playing = series.tracker.matchInProgress ? ', match in progress included' : '';
+			console.log(`Live: ${live.matches.length} games finished${playing}. ${live.teams.map((t) => `${t.name} ${t.wins}`).join(' - ')}`);
+			for (const player of live.players) printPlayer(player, seriesExtra(player));
+			return;
+		}
 		default:
-			if (command) console.log('Commands: "bo <N>", "all <N>", "r", "s".');
+			if (command) console.log('Commands: "bo <N>", "all <N>", "r", "s", "l".');
 	}
 });

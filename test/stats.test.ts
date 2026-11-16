@@ -471,6 +471,69 @@ describe('MatchTracker', () => {
 		});
 	});
 
+	describe('live player results', () => {
+		it('merges the live scoreboard and tracked stats, with a provisional MVP', () => {
+			const { tracker, match } = setup();
+			expect(tracker.matchInProgress).toBe(false);
+			expect(tracker.getPlayerResults()).toEqual([]);
+
+			match.players = [player('Ana', 0, { Score: 50, Speed: 1000 }), player('Bob', 1, { Score: 200 }), player('Cid', 1, { Score: 10 })];
+			match.start();
+			match.play(3);
+			expect(tracker.matchInProgress).toBe(true);
+			// Tied 0-0: the provisional MVP is the best player overall.
+			let results = tracker.getPlayerResults();
+			expect(results.map((p) => p.Name)).toEqual(['Bob', 'Ana', 'Cid']);
+			expect(results.find((p) => p.mvp)?.Name).toBe('Bob');
+			expect(results.find((p) => p.Name === 'Ana')).toMatchObject({ team: 'Blue', Score: 50, averageSpeed: 1000, leftEarly: false });
+
+			// Blue leads: the provisional MVP comes from blue. Cid left: leftEarly while not in the match.
+			match.teams[0]!.Score = 1;
+			match.players = [player('Ana', 0, { Score: 150 }), player('Bob', 1, { Score: 200 })];
+			match.play(1);
+			results = tracker.getPlayerResults();
+			expect(results.find((p) => p.mvp)?.Name).toBe('Ana');
+			expect(results.find((p) => p.Name === 'Cid')).toMatchObject({ leftEarly: true, Score: 10 });
+
+			// After the end: the final results, the same as the summary.
+			let summary: MatchSummary | undefined;
+			tracker.onMatchEnd((s) => (summary = s));
+			match.end(0, [1, 0]);
+			expect(tracker.matchInProgress).toBe(false);
+			expect(tracker.getPlayerResults()).toEqual(summary!.playerResults);
+		});
+
+		it('gives series totals that include the match being played, without counting its win', () => {
+			const series = new EsportsSeries(undefined, { games: 3 });
+			const match = new Match((event) => series.tracker.handle(event));
+			match.players = [player('Ana', 0, { Score: 100, Goals: 2 }), player('Bob', 1, { Score: 50 })];
+			match.start();
+			match.play(5);
+			match.end(0, [2, 0]);
+
+			match.players = [player('Ana', 0, { Score: 30, Goals: 1 }), player('Bob', 1, { Score: 80, Goals: 1 })];
+			match.teams[0]!.Score = 0;
+			match.teams[1]!.Score = 0;
+			match.start();
+			match.teams[0]!.Score = 1;
+			match.teams[1]!.Score = 1;
+			match.play(4);
+
+			const final = series.getResult();
+			const live = series.getLiveResult();
+			expect(live.matches).toHaveLength(1);
+			expect(final.players.find((p) => p.Name === 'Ana')).toMatchObject({ Goals: 2, matches: 1 });
+			expect(live.players.find((p) => p.Name === 'Ana')).toMatchObject({ Goals: 3, Score: 130, matches: 2 });
+			expect(live.teams.find((t) => t.name === 'Blue')).toMatchObject({ wins: 1, goals: 3 });
+			expect(live.teams.find((t) => t.name === 'Orange')).toMatchObject({ wins: 0, goals: 1 });
+
+			// Once the match ends, the live result is the recorded one.
+			match.end(1, [1, 2]);
+			expect(series.getLiveResult()).toEqual(series.getResult());
+			expect(series.getResult().teams.find((t) => t.name === 'Orange')?.wins).toBe(1);
+		});
+	});
+
 	describe('average speed', () => {
 		it('averages Speed over live ticks, skipping demolished, paused and countdown ticks', () => {
 			const { tracker, match } = setup();

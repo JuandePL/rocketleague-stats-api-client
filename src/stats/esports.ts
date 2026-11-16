@@ -1,4 +1,5 @@
 import type { Unsubscribe } from '../client.js';
+import type { TeamNum } from '../types/common.js';
 import { teamName, teamSide, TOTAL_STATS } from './helpers.js';
 import { MatchTracker, type CrossbarHits, type MatchSummary, type MatchTrackerOptions, type StatsEventSource } from './match.js';
 
@@ -98,6 +99,9 @@ export interface SeriesResult {
 	/** Highest total score on the winning team (or overall if there is no winner yet). */
 	mvp: SeriesPlayerResult | undefined;
 }
+
+/** What the series totals need from a match. A match in progress has no `winnerTeamNum` yet. */
+type CountedMatch = Pick<MatchSummary, 'teams' | 'boost' | 'possession' | 'playerResults'> & { winnerTeamNum?: TeamNum };
 
 export type SeriesStartListener = (options: Required<SeriesOptions>) => void;
 export type SeriesMatchListener = (match: MatchSummary, series: SeriesResult) => void;
@@ -219,10 +223,10 @@ export class EsportsSeries {
 		if (this.#matches.length >= games) return true;
 		if (format !== 'best-of') return false;
 		const needed = Math.floor(games / 2) + 1;
-		return this.#teams().some((team) => team.wins >= needed);
+		return this.#teams(this.#matches).some((team) => team.wins >= needed);
 	}
 
-	#teams(): SeriesTeamResult[] {
+	#teams(matches: readonly CountedMatch[]): SeriesTeamResult[] {
 		const teams = new Map<string, { result: SeriesTeamResult; possession: number }>();
 		let possessionTotal = 0;
 		const get = (name: string) => {
@@ -234,7 +238,7 @@ export class EsportsSeries {
 			return entry;
 		};
 
-		for (const match of this.#matches) {
+		for (const match of matches) {
 			for (const teamNum of [0, 1]) {
 				const side = teamSide(teamNum)!;
 				const entry = get(teamName(match.teams, teamNum));
@@ -242,7 +246,7 @@ export class EsportsSeries {
 				entry.result.boostUsed += match.boost.teams[side];
 				entry.possession += match.possession.seconds[side];
 			}
-			get(teamName(match.teams, match.winnerTeamNum)).result.wins++;
+			if (match.winnerTeamNum !== undefined) get(teamName(match.teams, match.winnerTeamNum)).result.wins++;
 			possessionTotal += match.possession.seconds.blue + match.possession.seconds.orange;
 		}
 
@@ -254,9 +258,9 @@ export class EsportsSeries {
 			.sort((a, b) => b.wins - a.wins || b.goals - a.goals);
 	}
 
-	#players(): SeriesPlayerResult[] {
+	#players(matches: readonly CountedMatch[]): SeriesPlayerResult[] {
 		const players = new Map<string, SeriesPlayerResult>();
-		for (const match of this.#matches) {
+		for (const match of matches) {
 			for (const result of match.playerResults) {
 				let total = players.get(result.key);
 				if (!total) {
@@ -313,8 +317,27 @@ export class EsportsSeries {
 
 	/** Results so far. Can be called at any time; check `finished` to know if the series is over. */
 	getResult(): SeriesResult {
-		const teams = this.#teams();
-		const players = this.#players();
+		return this.#result(this.#matches);
+	}
+
+	/**
+	 * Like {@link getResult}, but the team and player totals also include the match being played, so they
+	 * update live. Cheap enough to call on every `UpdateState`.
+	 *
+	 * - The current match adds goals, boost, possession and player stats, but no win until it ends.
+	 * - `matches` still holds only the finished matches. The current match is in `tracker`.
+	 * - Only while the series is `running`: otherwise it is the same as `getResult()`. That includes a finished
+	 *   series with `autoStart`, whose next match belongs to the next series.
+	 */
+	getLiveResult(): SeriesResult {
+		if (this.#status !== 'running' || !this.tracker.matchInProgress) return this.getResult();
+		const current: CountedMatch = { ...this.tracker.getStats(), teams: this.tracker.getTeams(), playerResults: this.tracker.getPlayerResults() };
+		return this.#result(this.#matches, [...this.#matches, current]);
+	}
+
+	#result(matches: MatchSummary[], counted: readonly CountedMatch[] = matches): SeriesResult {
+		const teams = this.#teams(counted);
+		const players = this.#players(counted);
 		const over = this.#status === 'finished' || this.#status === 'stopped';
 		const [first, second] = teams;
 		const winner = over && first && (!second || first.wins > second.wins) ? first.name : undefined;
@@ -323,7 +346,7 @@ export class EsportsSeries {
 			status: this.#status,
 			options: { ...this.#options },
 			finished: this.#status === 'finished',
-			matches: [...this.#matches],
+			matches: [...matches],
 			teams,
 			winner,
 			players,

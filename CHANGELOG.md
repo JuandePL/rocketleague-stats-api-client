@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - **Ball possession:** time each team was the last to touch the ball (`Game.Ball.TeamNum`).
   - **Per player:** boost used, air time, wall time (`onWallTime`), average speed (`averageSpeed` in Unreal Units/second, with `drivingTime`), and crossbar and post hits split into `attack` and `defense`.
   - **What counts:** only live play. Kickoff countdowns and goal replays are excluded, and overtime is counted. While the match is paused, everything is frozen (`tracker.paused`).
+  - **Live player results:** `tracker.getPlayerResults()` merges the live scoreboard with the tracked stats, with a provisional MVP. Also `tracker.getTeams()` and `tracker.matchInProgress`.
   - **Match summary:** on `MatchEnded` it emits a `MatchSummary` with the teams, winner, overtime flag and MVP. `playerResults` holds each player's `PrimaryId`, scoreboard and tracked stats.
 - Player identity ([#11]):
   - **`key`:** real accounts are identified by `PrimaryId`, so a name change doesn't split a player. Bots, which all share `"Unknown|0|0"`, are identified by name.
@@ -33,6 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - **`autoStart`:** on by default. The series records without calling `start()`, and a new one starts after each series ends.
   - **Controls:** `start()`, `restart()` and `stop()`.
   - **Results:** per team, per player and per match. Also the series winner and MVP.
+  - **Live results:** `getLiveResult()` also counts the match being played, without its win until it ends.
   - **Listeners:** `onSeriesStart`, `onMatchEnd` and `onSeriesEnd`.
 - General helpers ([#11]):
   - `getMvp`, `getTopPlayer` and `getTeamTotals`.
