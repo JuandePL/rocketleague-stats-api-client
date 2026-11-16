@@ -62,6 +62,10 @@ export interface SeriesPlayerResult {
 	leftEarly: number;
 	/** Matches in which the player was the MVP. */
 	mvps: number;
+	/** Times the player entered a match, summed over the series (see `MatchPlayerResult.joins`). */
+	joins: number;
+	/** Times the player left a match before its end, summed over the series. `leftEarly` counts matches instead. */
+	leaves: number;
 	Score: number;
 	Goals: number;
 	Shots: number;
@@ -274,6 +278,8 @@ export class EsportsSeries {
 						matches: 0,
 						leftEarly: 0,
 						mvps: 0,
+						joins: 0,
+						leaves: 0,
 						Score: 0,
 						Goals: 0,
 						Shots: 0,
@@ -297,6 +303,8 @@ export class EsportsSeries {
 				total.matches++;
 				if (result.leftEarly) total.leftEarly++;
 				if (result.mvp) total.mvps++;
+				total.joins += result.joins;
+				total.leaves += result.leaves;
 				if (result.PrimaryId) total.PrimaryId = result.PrimaryId;
 				for (const stat of TOTAL_STATS) total[stat] += result[stat];
 				total.boostUsed += result.boostUsed;

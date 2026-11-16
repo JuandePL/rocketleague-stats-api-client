@@ -538,6 +538,84 @@ describe('MatchTracker', () => {
 		});
 	});
 
+	describe('player sessions (joins, leaves and team changes)', () => {
+		it('records every time a player leaves and comes back, with the team', () => {
+			const { tracker, match } = setup();
+			const [ana, bob] = match.players as [Player, Player];
+			match.start(); // 05:00
+			match.play(10); // 04:50
+			match.players = [ana]; // Bob leaves after 04:50
+			match.play(5); // 04:45
+			match.players = [ana, bob]; // back at 04:44
+			match.play(1);
+			match.players = [ana]; // leaves again after 04:44
+			match.play(4); // 04:40
+			match.players = [ana, bob]; // back at 04:39 for good
+			match.play(1);
+
+			let summary: MatchSummary | undefined;
+			tracker.onMatchEnd((s) => (summary = s));
+			match.end(0, [1, 0]);
+
+			const bobResult = summary!.playerResults.find((p) => p.Name === 'Bob')!;
+			expect(bobResult).toMatchObject({ joins: 3, leaves: 2, leftEarly: false });
+			expect(bobResult.sessions.map((s) => [s.joinedAt.clock, s.leftAt?.clock, s.team])).toEqual([
+				['05:00', '04:50', 'Orange'],
+				['04:44', '04:44', 'Orange'],
+				['04:39', undefined, 'Orange'],
+			]);
+			const anaResult = summary!.playerResults.find((p) => p.Name === 'Ana')!;
+			expect(anaResult).toMatchObject({ joins: 1, leaves: 0 });
+			expect(anaResult.sessions).toHaveLength(1);
+		});
+
+		it('starts a new session when a player changes team, without counting a leave', () => {
+			const { tracker, match } = setup();
+			const [ana, bob] = match.players as [Player, Player];
+			match.start();
+			match.play(3); // 04:57
+			bob.TeamNum = 0; // Bob joins blue at 04:56
+			match.play(2);
+			match.players = [ana]; // then leaves after 04:55
+
+			match.play(1);
+			const bobLive = tracker.getPlayerResults().find((p) => p.Name === 'Bob')!;
+			expect(bobLive).toMatchObject({ joins: 1, leaves: 1, leftEarly: true });
+			expect(bobLive.sessions.map((s) => [s.team, s.joinedAt.clock, s.leftAt?.clock, s.switchedTeam])).toEqual([
+				['Orange', '05:00', '04:56', true],
+				['Blue', '04:56', '04:55', false],
+			]);
+		});
+
+		it('shows the open session in the live results and sums joins and leaves over the series', () => {
+			const series = new EsportsSeries(undefined, { games: 2, format: 'play-all' });
+			const match = new Match((event) => series.tracker.handle(event));
+			const playWithQuit = () => {
+				const [ana, bob] = [player('Ana', 0), player('Bob', 1)];
+				match.players = [ana, bob];
+				match.start();
+				match.play(2);
+				match.players = [ana];
+				match.play(2);
+				match.players = [ana, bob];
+				match.play(2);
+				match.end(0, [1, 0]);
+			};
+
+			playWithQuit();
+			match.players = [player('Ana', 0), player('Bob', 1)];
+			match.start();
+			match.play(1);
+			const open = series.tracker.getPlayerResults().find((p) => p.Name === 'Bob')!.sessions;
+			expect(open).toHaveLength(1);
+			expect(open[0]!.leftAt).toBeUndefined();
+			match.end(0, [1, 0]);
+
+			const bob = series.getResult().players.find((p) => p.Name === 'Bob')!;
+			expect(bob).toMatchObject({ joins: 3, leaves: 1, leftEarly: 0, matches: 2 });
+		});
+	});
+
 	describe('missing car fields', () => {
 		it('counts air time when the game leaves out bOnGround / bOnWall instead of sending false', () => {
 			const { tracker, match } = setup();

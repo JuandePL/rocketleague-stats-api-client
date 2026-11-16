@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Players who leave before the end (anti rage quit) stay in `playerResults` with `leftEarly: true` and their stats until they left ([#11]):
   - `leftAt` says when they left.
   - They can't be MVP.
+- Joins, leaves and team changes ([#11]): `sessions` lists every stretch of time a player was in the match, with the team and when they joined and left. `joins` and `leaves` count them, also summed in the series results.
 - Match timeline ([#11]):
   - Every event except `UpdateState` is kept with its `MatchMoment`: clock, play time, date and order.
   - `MatchSummary` has `timeline`, `endMoment` and `goals`.

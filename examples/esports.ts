@@ -56,9 +56,15 @@ function printPlayer(player: MatchPlayerResult | SeriesPlayerResult, extra = '')
 	);
 }
 
+/** "Orange 05:00-04:50, Orange 04:44-end": when the player was in the match and on which team. */
+function describeSessions(player: MatchPlayerResult): string {
+	const sessions = player.sessions.map((s) => `${s.team} ${s.joinedAt.clock}-${s.leftAt ? s.leftAt.clock : 'end'}`);
+	return `${sessions.join(', ')} (left ${player.leaves}x)`;
+}
+
 /** Games, MVPs, matches left early and platform id of a player over the series. */
 function seriesExtra(player: SeriesPlayerResult): string {
-	const left = player.leftEarly > 0 ? `, left ${player.leftEarly} early` : '';
+	const left = player.leaves > 0 ? `, left ${player.leaves}x (${player.leftEarly} games not finished)` : '';
 	const id = player.bot ? 'bot' : player.PrimaryId;
 	const aka = player.names.length > 1 ? `, also ${player.names.filter((name) => name !== player.Name).join(', ')}` : '';
 	return `  ${player.matches} games, ${player.mvps} MVPs${left}  [${id}${aka}]`;
@@ -94,6 +100,7 @@ series.onMatchEnd((match, result) => {
 			left += toGoal ? `, ${Math.round(toGoal.clockSeconds)} s before the next goal` : ', no goal after';
 		}
 		printPlayer(player, player.mvp ? '  MVP' : left);
+		if (player.sessions.length > 1) console.log(`      in and out: ${describeSessions(player)}`);
 	}
 	console.log(`  Series: ${result.teams.map((team) => `${team.name} ${team.wins}`).join(' - ')}`);
 });

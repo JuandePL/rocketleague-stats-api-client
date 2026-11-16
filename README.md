@@ -217,6 +217,21 @@ When the match ends, it gives you a `MatchSummary` with the teams, the winner an
 - `secondsPlayed`: seconds of play until then.
 - `date`: the real time.
 
+**Joins, leaves and team changes:** every player result has `sessions`, one entry per stretch of time the player was in the match:
+
+```ts
+sessions: [
+  { team: 'Blue', TeamNum: 0, joinedAt: MatchMoment, leftAt: MatchMoment, switchedTeam: false }, // left
+  { team: 'Blue', TeamNum: 0, joinedAt: MatchMoment, switchedTeam: false },                      // came back, still in at the end
+],
+joins: 2,  // times the player entered, the first time included
+leaves: 1, // times the player left before the end
+```
+
+- A team change ends the session (`switchedTeam: true`) and starts a new one on the new team. It counts as neither a join nor a leave.
+- `leftAt` is the last `UpdateState` the player was in, so the real exit is at most one tick later. An open session (no `leftAt`) means the player was in at the end, or is in right now for `getPlayerResults()`.
+- They come from `UpdateState`, so they work for bots too, and they include the team. `PlayerJoined` / `PlayerLeft` are in the `timeline` too, without the team.
+
 `formatMatchClock(timeSeconds, overtime)` formats any clock value the same way. Minutes have two digits by default. Pass `{ padMinutes: false }` for `"2:35"`.
 
 #### Time between a player leaving and the end, a goal, or any event
@@ -290,7 +305,7 @@ series.tracker.getStats();                        // live stats of the current m
     new EsportsSeries(client, { identifyPlayer: (p) => (p.PrimaryId && aliases[p.PrimaryId]) || playerKey(p) });
     ```
 - **Per-team results** include wins, goals, boost used and possession over the whole series.
-- **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, average speed (weighted by `drivingTime`), crossbar hits (attack and defense), matches played, matches left early (`leftEarly`) and the number of MVPs.
+- **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, average speed (weighted by `drivingTime`), crossbar hits (attack and defense), matches played, matches left early (`leftEarly`), joins and leaves summed over the matches, and the number of MVPs.
 - **Per-match player results:** each match in `result.matches` keeps its own `playerResults`.
 - **Which matches count:** only matches that end (`MatchEnded`) while the series is running are recorded.
 - **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match ends. That match then becomes the first of the new series.

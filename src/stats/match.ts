@@ -112,6 +112,25 @@ export function formatMatchClock(timeSeconds: number, overtime = false, options:
 }
 
 /**
+ * A stretch of time a player was in the match, on one team. A new session starts every time the player
+ * joins (or comes back) and every time they change team.
+ */
+export interface PlayerSession {
+	TeamNum: TeamNum;
+	/** Name of the team (`Game.Teams[].Name`). */
+	team: string;
+	/** First `UpdateState` the player was in. */
+	joinedAt: MatchMoment;
+	/**
+	 * Last `UpdateState` the player was in, so the real exit is at most one tick later.
+	 * Not set when the player was still in the match at the end (or right now, for live results).
+	 */
+	leftAt?: MatchMoment;
+	/** `true` when the session ended because the player changed team, not because they left. */
+	switchedTeam: boolean;
+}
+
+/**
  * Everything about one player in one match: the scoreboard plus the tracked stats.
  * Players who left before the end keep the stats they had when they were last seen.
  */
@@ -124,6 +143,12 @@ export interface MatchPlayerResult extends TrackedPlayerStats {
 	leftEarly: boolean;
 	/** When the player was last seen in the match. Only set when `leftEarly` is `true`. */
 	leftAt?: LeftAt;
+	/** Every time the player was in the match, in order, with the team they were on. */
+	sessions: PlayerSession[];
+	/** Times the player entered the match, the first time included (team changes don't count). */
+	joins: number;
+	/** Times the player left before the end (team changes don't count). */
+	leaves: number;
 	Score: number;
 	Goals: number;
 	Shots: number;
@@ -197,6 +222,8 @@ interface PlayerAccumulator {
 	lastSeen: Player | undefined;
 	/** When `lastSeen` was recorded. */
 	lastSeenAt: MatchMoment | undefined;
+	/** Times in the match. The last one is open (no `leftAt`) while the player is in. */
+	sessions: { TeamNum: TeamNum; joinedAt: MatchMoment; leftAt?: MatchMoment; switchedTeam: boolean }[];
 }
 
 export interface MatchTrackerOptions {
@@ -464,6 +491,7 @@ export class MatchTracker {
 				lastBoost: undefined,
 				lastSeen: undefined,
 				lastSeenAt: undefined,
+				sessions: [],
 			};
 			this.#players.set(key, entry);
 		}
@@ -496,12 +524,33 @@ export class MatchTracker {
 		// Remember every player's latest scoreboard, so it survives if they leave.
 		const entries = players.map((player) => [player, this.#accumulator(player)] as const);
 		const seenAt = this.#moment(game);
+		this.#trackSessions(entries, seenAt);
 		for (const [player, entry] of entries) {
 			entry.lastSeen = player;
 			entry.lastSeenAt = seenAt;
 		}
 		if (!game.bReplay) this.#count(game, entries); // goal replays repeat old ticks
 		seenAt.secondsPlayed = this.#secondsPlayed; // including this tick
+	}
+
+	/** Opens a session for players who joined or changed team, and closes it for players who are gone. */
+	#trackSessions(entries: ReadonlyArray<readonly [Player, PlayerAccumulator]>, seenAt: MatchMoment): void {
+		const present = new Set<PlayerAccumulator>();
+		for (const [player, entry] of entries) {
+			present.add(entry);
+			const open = entry.sessions.at(-1);
+			if (open && !open.leftAt && open.TeamNum === player.TeamNum) continue;
+			if (open && !open.leftAt) {
+				// Changed team: the old session ends now, the new one starts now.
+				open.leftAt = seenAt;
+				open.switchedTeam = true;
+			}
+			entry.sessions.push({ TeamNum: player.TeamNum, joinedAt: seenAt, switchedTeam: false });
+		}
+		for (const entry of this.#players.values()) {
+			const open = entry.sessions.at(-1);
+			if (!present.has(entry) && open && !open.leftAt && entry.lastSeenAt) open.leftAt = entry.lastSeenAt;
+		}
 	}
 
 	#count(game: Game, entries: ReadonlyArray<readonly [Player, PlayerAccumulator]>): void {
@@ -637,6 +686,15 @@ export class MatchTracker {
 			.map(({ player, leftEarly, leftAt }) => {
 				const key = this.#identify(player);
 				const own = tracked.get(key);
+				const sessions = (this.#players.get(key)?.sessions ?? []).map(
+					(session): PlayerSession => ({
+						TeamNum: session.TeamNum,
+						team: teamName(teams, session.TeamNum),
+						joinedAt: { ...session.joinedAt },
+						...(session.leftAt ? { leftAt: { ...session.leftAt } } : {}),
+						switchedTeam: session.switchedTeam,
+					}),
+				);
 				const result: MatchPlayerResult = {
 					key,
 					PrimaryId: player.PrimaryId,
@@ -648,6 +706,9 @@ export class MatchTracker {
 					mvp: key === mvpKey,
 					leftEarly,
 					...(leftAt ? { leftAt: { ...leftAt } } : {}),
+					sessions,
+					joins: sessions.filter((session, i) => i === 0 || !sessions[i - 1]!.switchedTeam).length,
+					leaves: sessions.filter((session) => session.leftAt && !session.switchedTeam).length,
 					Score: 0,
 					Goals: 0,
 					Shots: 0,
