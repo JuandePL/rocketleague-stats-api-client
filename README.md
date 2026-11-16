@@ -174,7 +174,17 @@ getTopPlayer(data.Players, 'Saves');  // player with the most saves
 getTeamTotals(data.Players);          // { blue: { Score, Goals, Shots, ... }, orange: { ... } }
 ```
 
-### `MatchTracker`: possession, boost, air time and crossbar hits
+Speeds from the game (`Speed`, `GoalSpeed`, `averageSpeed`, …) are in Unreal Units/second. Convert them with:
+
+```ts
+import { convertSpeed, toKmh, toMph } from '@juande_pl/rocketleague-stats-api-client';
+
+toKmh(2200);                 // 79.2 (supersonic)
+toMph(2200);                 // ≈ 49.2
+convertSpeed(2200, 'mph');   // same as toMph
+```
+
+### `MatchTracker`: possession, boost, air time, speed and crossbar hits
 
 ```ts
 import { MatchTracker } from '@juande_pl/rocketleague-stats-api-client';
@@ -190,11 +200,12 @@ tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possessio
 | `boost`             | Each tick, how much each player's boost went down, summed per player and per team. Pickups and demolitions don't count. |
 | `players[].airTime` | Seconds each player spent in the air: neither on the ground nor on a wall, and not demolished.          |
 | `players[].onWallTime` | Seconds each player spent driving on a wall (`bOnWall`), not demolished.                            |
+| `players[].averageSpeed` | Average car speed (`Speed`) in Unreal Units/second, not demolished. Convert it with `toKmh()` or `toMph()`. `drivingTime` is the time it covers. |
 | `players[].crossbar` | Crossbar and post hits (`CrossbarHit`) by each player: `attack` on the opponent's goal, `defense` on their own goal. |
 
-Only time with the ball in play counts. Kickoff countdowns and goal replays are excluded, and overtime is counted. **While the match is paused (`MatchPaused` until `MatchUnpaused`), everything is frozen:** time, possession, boost usage, air time, wall time and crossbar hits. Check `tracker.paused` to know if it is paused. The tracker resets on its own when a new match starts.
+Only time with the ball in play counts. Kickoff countdowns and goal replays are excluded, and overtime is counted. **While the match is paused (`MatchPaused` until `MatchUnpaused`), everything is frozen:** time, possession, boost usage, air time, wall time, speed and crossbar hits. Check `tracker.paused` to know if it is paused. The tracker resets on its own when a new match starts.
 
-When the match ends, it gives you a `MatchSummary` with the teams, the winner and the MVP. Its `playerResults` has one entry per player: `PrimaryId`, the scoreboard (`Score`, `Goals`, `Assists`, `Saves`, `Shots`, …), `team`, `mvp`, `leftEarly`, `boostUsed`, `airTime`, `onWallTime` and `crossbar`. The raw scoreboard sent by the game is in `scoreboard`.
+When the match ends, it gives you a `MatchSummary` with the teams, the winner and the MVP. Its `playerResults` has one entry per player: `PrimaryId`, the scoreboard (`Score`, `Goals`, `Assists`, `Saves`, `Shots`, …), `team`, `mvp`, `leftEarly`, `boostUsed`, `airTime`, `onWallTime`, `averageSpeed`, `drivingTime` and `crossbar`. The raw scoreboard sent by the game is in `scoreboard`.
 
 **Players who leave before the end (rage quit, disconnect)** stay in `playerResults` with `leftEarly: true` and the stats they had when they were last seen. They can't be MVP. A player who leaves and comes back before the end counts as a normal player.
 
@@ -228,7 +239,7 @@ timeBetween(summary.goals[0].moment, summary.endMoment);                        
 
 > **Limitations:**
 > - There is no field domination (time the ball spends in each half): `UpdateState` doesn't send the ball position. It will be added if a future Stats API update includes it.
-> - `Boost`, `bOnGround` and `bOnWall` are `SPECTATOR` fields, so boost usage, air time and wall time are only tracked while spectating.
+> - `Boost`, `Speed`, `bOnGround` and `bOnWall` are `SPECTATOR` fields, so boost usage, speed, air time and wall time are only tracked while spectating.
 > - The game sets `bOnGround` only with 3 or more wheels down, so driving on 2 wheels counts as air time.
 
 ### `EsportsSeries`: esports mode
@@ -274,7 +285,7 @@ series.tracker.getStats();                        // live stats of the current m
     new EsportsSeries(client, { identifyPlayer: (p) => (p.PrimaryId && aliases[p.PrimaryId]) || playerKey(p) });
     ```
 - **Per-team results** include wins, goals, boost used and possession over the whole series.
-- **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, crossbar hits (attack and defense), matches played, matches left early (`leftEarly`) and the number of MVPs.
+- **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, average speed (weighted by `drivingTime`), crossbar hits (attack and defense), matches played, matches left early (`leftEarly`) and the number of MVPs.
 - **Per-match player results:** each match in `result.matches` keeps its own `playerResults`.
 - **Which matches count:** only matches that end (`MatchEnded`) while the series is running are recorded.
 - **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match ends. That match then becomes the first of the new series.

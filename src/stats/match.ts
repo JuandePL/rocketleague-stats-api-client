@@ -54,6 +54,14 @@ export interface TrackedPlayerStats extends PlayerBoostUsage {
 	airTime: number;
 	/** Seconds driving on a wall (`SPECTATOR` `bOnWall`), with a car that isn't demolished. */
 	onWallTime: number;
+	/**
+	 * Average speed in Unreal Units/second. Use `toKmh()` / `toMph()` (or `convertSpeed()`) for km/h or mph.
+	 * Only live play with a car that isn't demolished counts. Needs the `SPECTATOR` `Speed` field;
+	 * `0` when it was never sent.
+	 */
+	averageSpeed: number;
+	/** Seconds the player's speed was measured: the time `averageSpeed` covers. */
+	drivingTime: number;
 	crossbar: CrossbarHits;
 }
 
@@ -179,6 +187,9 @@ interface PlayerAccumulator {
 	boostUsed: number;
 	airTicks: number;
 	wallTicks: number;
+	/** Sum of `Speed` over the ticks counted in `speedTicks`. */
+	speedSum: number;
+	speedTicks: number;
 	crossbar: CrossbarHits;
 	lastBoost: { boost: number; demolished: boolean } | undefined;
 	/** Last `UpdateState` entry of the player: their scoreboard if they leave before the end. */
@@ -199,6 +210,11 @@ export interface MatchTrackerOptions {
 /** `true` when the car is driving on a wall (only known while spectating). */
 function isOnWall(player: Player): boolean {
 	return player.bHasCar !== false && player.bDemolished !== true && player.bOnWall === true;
+}
+
+/** `true` when the player has a car that isn't demolished and its speed is known (only while spectating). */
+function hasSpeed(player: Player): player is Player & { Speed: number } {
+	return player.bHasCar !== false && player.bDemolished !== true && typeof player.Speed === 'number' && Number.isFinite(player.Speed);
 }
 
 /** `true` when the car is airborne (only known while spectating). */
@@ -390,6 +406,8 @@ export class MatchTracker {
 				boostUsed: 0,
 				airTicks: 0,
 				wallTicks: 0,
+				speedSum: 0,
+				speedTicks: 0,
 				crossbar: { attack: 0, defense: 0, total: 0 },
 				lastBoost: undefined,
 				lastSeen: undefined,
@@ -453,6 +471,10 @@ export class MatchTracker {
 		for (const [player, entry] of entries) {
 			if (isInAir(player)) entry.airTicks++;
 			else if (isOnWall(player)) entry.wallTicks++;
+			if (hasSpeed(player)) {
+				entry.speedSum += player.Speed;
+				entry.speedTicks++;
+			}
 		}
 	}
 
@@ -481,6 +503,8 @@ export class MatchTracker {
 			boostUsed: entry.boostUsed,
 			airTime: seconds(entry.airTicks),
 			onWallTime: seconds(entry.wallTicks),
+			averageSpeed: entry.speedTicks > 0 ? entry.speedSum / entry.speedTicks : 0,
+			drivingTime: seconds(entry.speedTicks),
 			crossbar: { ...entry.crossbar },
 		}));
 		const boostTeams: TeamSplit = { blue: 0, orange: 0 };
@@ -557,6 +581,8 @@ export class MatchTracker {
 					boostUsed: own?.boostUsed ?? 0,
 					airTime: own?.airTime ?? 0,
 					onWallTime: own?.onWallTime ?? 0,
+					averageSpeed: own?.averageSpeed ?? 0,
+					drivingTime: own?.drivingTime ?? 0,
 					crossbar: own ? { ...own.crossbar } : { attack: 0, defense: 0, total: 0 },
 				};
 				for (const stat of TOTAL_STATS) result[stat] = player[stat] ?? 0;

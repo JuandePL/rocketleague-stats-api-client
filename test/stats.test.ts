@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+	convertSpeed,
 	EsportsSeries,
 	type EsportsSeriesOptions,
 	findEventAfter,
@@ -15,6 +16,8 @@ import {
 	timeFromPlayerLeftTo,
 	timeFromPlayerLeftToMatchEnd,
 	timeFromPlayerLeftToNextGoal,
+	toKmh,
+	toMph,
 	type AnyEventListener,
 	type Game,
 	type MatchSummary,
@@ -112,6 +115,14 @@ class Match {
 }
 
 describe('helpers', () => {
+	it('converts Unreal Units/second to km/h and mph', () => {
+		expect(toKmh(2200)).toBeCloseTo(79.2); // supersonic
+		expect(toMph(2200)).toBeCloseTo(49.21, 2);
+		expect(toKmh(0)).toBe(0);
+		expect(convertSpeed(1000, 'kmh')).toBeCloseTo(36);
+		expect(convertSpeed(1000, 'mph')).toBe(toMph(1000));
+	});
+
 	it('formats the match clock with two-digit minutes by default', () => {
 		expect(formatMatchClock(155)).toBe('02:35');
 		expect(formatMatchClock(300)).toBe('05:00');
@@ -457,6 +468,62 @@ describe('MatchTracker', () => {
 			expect(anaIn(first).airTime).toBe(0);
 			const total = series.getResult().players.find((p) => p.Name === 'Ana')!;
 			expect(total.onWallTime).toBeCloseTo(anaIn(first).onWallTime + anaIn(second).onWallTime);
+		});
+	});
+
+	describe('average speed', () => {
+		it('averages Speed over live ticks, skipping demolished, paused and countdown ticks', () => {
+			const { tracker, match } = setup();
+			const [ana, bob] = match.players as [Player, Player];
+			bob.Speed = undefined; // not spectating Bob's speed
+			ana.Speed = 9999; // countdown: not counted
+			match.frozen(3);
+			ana.Speed = 1000;
+			match.start();
+			match.play(4);
+			ana.Speed = 2000;
+			match.play(3);
+			ana.bDemolished = true;
+			ana.Speed = 0;
+			match.play(2); // demolished: not counted
+			ana.bDemolished = false;
+			match.send(ev('MatchPaused'));
+			ana.Speed = 9999;
+			match.frozen(5); // paused: not counted
+			match.send(ev('MatchUnpaused'));
+			ana.Speed = 2000;
+			match.play(1);
+
+			const stats = tracker.getStats();
+			const anaStats = stats.players.find((p) => p.Name === 'Ana')!;
+			// Start tick + 4 ticks at 1000, 3 + 1 ticks at 2000. 9 of 11 live ticks measured.
+			expect(anaStats.averageSpeed).toBeCloseTo((5 * 1000 + 4 * 2000) / 9);
+			expect(anaStats.drivingTime).toBeCloseTo((9 / 11) * 10);
+			// Bob never sent Speed.
+			expect(stats.players.find((p) => p.Name === 'Bob')).toMatchObject({ averageSpeed: 0, drivingTime: 0 });
+		});
+
+		it('keeps it in the match results and weights the series average by driving time', () => {
+			const series = new EsportsSeries(undefined, { games: 2, format: 'play-all' });
+			const match = new Match((event) => series.tracker.handle(event));
+			const playAt = (speed: number, seconds: number) => {
+				match.players = [player('Ana', 0, { Score: 100, Speed: speed }), player('Bob', 1, { Score: 50 })];
+				match.start();
+				match.play(seconds);
+				match.end(0, [1, 0]);
+			};
+			playAt(1000, 3);
+			playAt(2000, 9);
+
+			const [first, second] = series.matches;
+			const anaIn = (m: typeof first) => m!.playerResults.find((p) => p.Name === 'Ana')!;
+			expect(anaIn(first).averageSpeed).toBe(1000);
+			expect(anaIn(second).averageSpeed).toBe(2000);
+			const total = series.getResult().players.find((p) => p.Name === 'Ana')!;
+			expect(total.drivingTime).toBeCloseTo(anaIn(first).drivingTime + anaIn(second).drivingTime);
+			const weighted = (1000 * anaIn(first).drivingTime + 2000 * anaIn(second).drivingTime) / total.drivingTime;
+			expect(total.averageSpeed).toBeCloseTo(weighted);
+			expect(total.averageSpeed).toBeGreaterThan(1500);
 		});
 	});
 

@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `MatchTracker` tracks live stats of the current match ([#11]):
   - **Ball possession:** time each team was the last to touch the ball (`Game.Ball.TeamNum`).
-  - **Per player:** boost used, air time, wall time (`onWallTime`), and crossbar and post hits split into `attack` and `defense`.
+  - **Per player:** boost used, air time, wall time (`onWallTime`), average speed (`averageSpeed` in Unreal Units/second, with `drivingTime`), and crossbar and post hits split into `attack` and `defense`.
   - **What counts:** only live play. Kickoff countdowns and goal replays are excluded, and overtime is counted. While the match is paused, everything is frozen (`tracker.paused`).
   - **Match summary:** on `MatchEnded` it emits a `MatchSummary` with the teams, winner, overtime flag and MVP. `playerResults` holds each player's `PrimaryId`, scoreboard and tracked stats.
 - Player identity ([#11]):
@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - **Listeners:** `onSeriesStart`, `onMatchEnd` and `onSeriesEnd`.
 - General helpers ([#11]):
   - `getMvp`, `getTopPlayer` and `getTeamTotals`.
+  - `toKmh`, `toMph` and `convertSpeed(value, 'kmh' | 'mph')` convert speeds from Unreal Units/second (`Speed`, `GoalSpeed`, `averageSpeed`, …).
   - `formatMatchClock`, which gives `"02:35"` / `"+01:10"` by default, or `"2:35"` with `{ padMinutes: false }`.
 - `examples/esports.ts` records series and prints the stats of each match and player ([#11]).
 - CI with GitHub Actions: typecheck, tests, build and package check on Node.js 22 and 24, on Linux and Windows ([#12]).

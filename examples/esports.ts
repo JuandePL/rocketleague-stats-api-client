@@ -15,7 +15,7 @@
  *   s         stop the series and show the results so far (no automatic restart until "r" or "bo").
  *
  * Requires Rocket League running with the Stats API enabled (see README).
- * Spectate the matches to get boost usage and air time (those fields are only sent to spectators).
+ * Spectate the matches to get boost usage, speed and air time (those fields are only sent to spectators).
  */
 import { createInterface } from 'node:readline';
 import {
@@ -26,6 +26,7 @@ import {
 	type SeriesPlayerResult,
 	timeFromPlayerLeftToMatchEnd,
 	timeFromPlayerLeftToNextGoal,
+	toKmh,
 } from '../src/index.js';
 
 /** Reads the series settings from the command line. */
@@ -43,14 +44,15 @@ const describe = ({ games, format }: SeriesOptions) =>
 
 const pct = (value: number) => `${value.toFixed(0)}%`;
 const secs = (value: number) => `${value.toFixed(1)} s`;
+const kmh = (uuPerSecond: number) => `${toKmh(uuPerSecond).toFixed(0)} km/h`;
 
-/** One line per player: scoreboard, boost, air time and crossbar hits. */
+/** One line per player: scoreboard, boost, air time, speed and crossbar hits. */
 function printPlayer(player: MatchPlayerResult | SeriesPlayerResult, extra = ''): void {
 	const { attack, defense } = player.crossbar;
 	console.log(
 		`    ${player.Name.padEnd(16)} ${player.team.padEnd(10)} ` +
 			`${String(player.Score).padStart(4)} pts  G ${player.Goals}  A ${player.Assists}  Sv ${player.Saves}  Sh ${player.Shots}  ` +
-			`boost ${player.boostUsed.toFixed(0)}  air ${secs(player.airTime)}  wall ${secs(player.onWallTime)}  posts ${attack} att / ${defense} def${extra}`,
+			`boost ${player.boostUsed.toFixed(0)}  air ${secs(player.airTime)}  wall ${secs(player.onWallTime)}  speed ${kmh(player.averageSpeed)}  posts ${attack} att / ${defense} def${extra}`,
 	);
 }
 

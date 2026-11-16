@@ -74,6 +74,10 @@ export interface SeriesPlayerResult {
 	airTime: number;
 	/** Seconds driving on a wall (see `TrackedPlayerStats.onWallTime`). */
 	onWallTime: number;
+	/** Average speed over the series in Unreal Units/second, weighted by `drivingTime` (see `TrackedPlayerStats.averageSpeed`). */
+	averageSpeed: number;
+	/** Seconds the player's speed was measured over the series. */
+	drivingTime: number;
 	/** Crossbar and post hits on the opponent's goal (`attack`) and on the player's own goal (`defense`). */
 	crossbar: CrossbarHits;
 }
@@ -277,6 +281,8 @@ export class EsportsSeries {
 						boostUsed: 0,
 						airTime: 0,
 						onWallTime: 0,
+						averageSpeed: 0,
+						drivingTime: 0,
 						crossbar: { attack: 0, defense: 0, total: 0 },
 					};
 					players.set(result.key, total);
@@ -292,6 +298,11 @@ export class EsportsSeries {
 				total.boostUsed += result.boostUsed;
 				total.airTime += result.airTime;
 				total.onWallTime += result.onWallTime;
+				const drivingTime = total.drivingTime + result.drivingTime;
+				if (drivingTime > 0) {
+					total.averageSpeed = (total.averageSpeed * total.drivingTime + result.averageSpeed * result.drivingTime) / drivingTime;
+				}
+				total.drivingTime = drivingTime;
 				total.crossbar.attack += result.crossbar.attack;
 				total.crossbar.defense += result.crossbar.defense;
 				total.crossbar.total += result.crossbar.total;
