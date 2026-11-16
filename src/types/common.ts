@@ -42,7 +42,7 @@ export interface PlayerRef {
 export interface BallLastTouch {
 	/** The player who made the last touch. */
 	Player: PlayerRef;
-	/** Speed of the ball resulting from this touch. */
+	/** Speed of the ball resulting from this touch, in km/h. */
 	Speed: number;
 }
 
@@ -79,7 +79,7 @@ export interface Player extends PlayerRef {
 	Loadout?: string[];
 	/** `SPECTATOR` True if the player currently has a vehicle. */
 	bHasCar?: boolean;
-	/** `SPECTATOR` Vehicle speed in Unreal Units/second. */
+	/** `SPECTATOR` Vehicle speed in km/h. */
 	Speed?: number;
 	/** `SPECTATOR` Boost amount 0–100. */
 	Boost?: number;
@@ -120,7 +120,7 @@ export interface GameTeam {
 
 /** Current ball state inside `UpdateState.Game.Ball`. */
 export interface GameBall {
-	/** Current ball speed in Unreal Units/second. */
+	/** Current ball speed in km/h. */
 	Speed: number;
 	/** Index of the last team to touch the ball. `255` if the ball has not been touched. */
 	TeamNum: TeamNum;
