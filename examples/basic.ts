@@ -14,7 +14,7 @@ client.on('invalidMessage', (failure) => console.warn(`Invalid message (${failur
 
 client.on('GoalScored', (data) => {
 	const assist = data.Assister ? ` (assist: ${data.Assister.Name})` : '';
-	console.log(`GOAL by ${data.Scorer.Name}${assist} at ${data.GoalSpeed.toFixed(0)} uu/s`);
+	console.log(`GOAL by ${data.Scorer.Name}${assist} at ${data.GoalSpeed.toFixed(0)} km/h`);
 });
 
 client.onAny((event) => {

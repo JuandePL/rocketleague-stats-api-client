@@ -56,7 +56,7 @@ const client = new RocketLeagueStatsClient(); // ws://127.0.0.1:49124, connects 
 
 // A single event: `data` is typed as GoalScoredData
 client.on('GoalScored', (data) => {
-  console.log(`${data.Scorer.Name} scored at ${data.GoalSpeed} uu/s`);
+  console.log(`${data.Scorer.Name} scored at ${data.GoalSpeed} km/h`);
 });
 
 // Every event, as a discriminated union
@@ -174,14 +174,13 @@ getTopPlayer(data.Players, 'Saves');  // player with the most saves
 getTeamTotals(data.Players);          // { blue: { Score, Goals, Shots, ... }, orange: { ... } }
 ```
 
-Speeds from the game (`Speed`, `GoalSpeed`, `averageSpeed`, …) are in Unreal Units/second. Convert them with:
+Every speed from the game (`Speed`, `GoalSpeed`, `BallSpeed`, `Game.Ball.Speed`, `averageSpeed`, …) is in km/h. For mph:
 
 ```ts
-import { convertSpeed, toKmh, toMph } from '@juande_pl/rocketleague-stats-api-client';
+import { convertSpeed, toMph } from '@juande_pl/rocketleague-stats-api-client';
 
-toKmh(2200);                 // 79.2 (supersonic)
-toMph(2200);                 // ≈ 49.2
-convertSpeed(2200, 'mph');   // same as toMph
+toMph(data.GoalSpeed);             // km/h → mph
+convertSpeed(data.GoalSpeed, unit); // unit: 'kmh' (as is) or 'mph', handy when it is a setting
 ```
 
 ### `MatchTracker`: possession, boost, air time, speed and crossbar hits
@@ -201,8 +200,8 @@ tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possessio
 | `boost`             | Each tick, how much each player's boost went down, summed per player and per team. Pickups and demolitions don't count. |
 | `players[].airTime` | Seconds each player spent in the air: neither on the ground nor on a wall, and not demolished.          |
 | `players[].onWallTime` | Seconds each player spent driving on a wall (`bOnWall`), not demolished.                            |
-| `players[].averageSpeed` | Average car speed (`Speed`) in Unreal Units/second, not demolished. Convert it with `toKmh()` or `toMph()`. `drivingTime` is the time it covers. |
-| `players[].crossbar` | Crossbar and post hits (`CrossbarHit`) by each player: `attack` on the opponent's goal, `defense` on their own goal. |
+| `players[].averageSpeed` | Average car speed (`Speed`) in km/h, not demolished. `toMph()` converts it. `drivingTime` is the time it covers. |
+| `players[].crossbar` | Crossbar and post hits (`CrossbarHit`) by each player: `attack` on the opponent's goal, `defense` on their own goal. One per touch: the extra `CrossbarHit` the game sends for the same impact are ignored. |
 
 Only time with the ball in play counts. Kickoff countdowns and goal replays are excluded, and overtime is counted. **While the match is paused (`MatchPaused` until `MatchUnpaused`), everything is frozen:** time, possession, boost usage, air time, wall time, speed and crossbar hits. Check `tracker.paused` to know if it is paused. The tracker resets on its own when a new match starts.
 
@@ -244,6 +243,7 @@ timeBetween(summary.goals[0].moment, summary.endMoment);                        
 > - There is no field domination (time the ball spends in each half): `UpdateState` doesn't send the ball position. It will be added if a future Stats API update includes it.
 > - `Boost`, `Speed`, `bOnGround` and `bOnWall` are `SPECTATOR` fields, so boost usage, speed, air time and wall time are only tracked while spectating.
 > - The game sets `bOnGround` only with 3 or more wheels down, so driving on 2 wheels counts as air time.
+> - On the ceiling, the game sends `bOnGround: true` and `bOnWall: false`, so ceiling time counts as ground: neither air time nor wall time.
 
 ### `EsportsSeries`: esports mode
 
@@ -276,7 +276,7 @@ series.tracker.getStats();                        // live stats of the current m
 | `restart()`            | Starts again with the same options. Clears the stored matches.                                |
 | `stop()`               | Stops recording, and the automatic restart until the next `start()` or `restart()`. The matches played so far stay in `getResult()`. |
 | `getResult()`          | `{ status, finished, matches, teams, winner, players, mvp }`, with the finished matches.      |
-| `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. Cheap enough for every `UpdateState`. |
+| `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. After a series finished with `autoStart`, it already shows the new series during its first match. Cheap enough for every `UpdateState`. |
 | `status`               | `'idle'`, `'running'`, `'finished'` or `'stopped'`.                                           |
 | `onSeriesStart` / `onMatchEnd` / `onSeriesEnd` | Listeners. `onSeriesStart` also fires on automatic restarts. Each returns an unsubscribe function. |
 | `dispose()`            | Stops listening to the client.                                                                 |
@@ -323,6 +323,8 @@ The building blocks (`shape`, `optional`, `arrayOf`, `oneOf`, `isString`, `isNum
 - `StatfeedEvent.Type` is a localized label. Use `EventName` in your logic.
 - `GoalScored.GoalTime` is the length of the previous round, not the match clock.
 - In offline exhibitions or with splitscreen players, `StatfeedEvent` can arrive more than once.
+- Every speed (`Player.Speed`, `Game.Ball.Speed`, `GoalSpeed`, `BallSpeed`, `BallLastTouch.Speed`, …) is in km/h, not in Unreal Units/second.
+- A car on the ceiling is reported as `bOnGround: true`, `bOnWall: false`, the same as on the ground.
 - When a replay ends, the game sends a fake `GoalScored` event whose `Scorer` is `{ "Name": "", "Shortcut": 0, "TeamNum": 0 }`. The client drops it by default. Pass `ignoreReplayEndGoal: false` to receive it, and use `isReplayEndGoal(event)` to detect it yourself.
 
 ## Development

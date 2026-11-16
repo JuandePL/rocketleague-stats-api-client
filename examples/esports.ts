@@ -27,7 +27,6 @@ import {
 	type SeriesPlayerResult,
 	timeFromPlayerLeftToMatchEnd,
 	timeFromPlayerLeftToNextGoal,
-	toKmh,
 } from '../src/index.js';
 
 /** Reads the series settings from the command line. */
@@ -45,7 +44,7 @@ const describe = ({ games, format }: SeriesOptions) =>
 
 const pct = (value: number) => `${value.toFixed(0)}%`;
 const secs = (value: number) => `${value.toFixed(1)} s`;
-const kmh = (uuPerSecond: number) => `${toKmh(uuPerSecond).toFixed(0)} km/h`;
+const kmh = (speed: number) => `${speed.toFixed(0)} km/h`; // the game sends speeds in km/h
 
 /** One line per player: scoreboard, boost, air time, speed and crossbar hits. */
 function printPlayer(player: MatchPlayerResult | SeriesPlayerResult, extra = ''): void {

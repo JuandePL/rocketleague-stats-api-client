@@ -49,13 +49,14 @@ export interface TrackedPlayerStats extends PlayerBoostUsage {
 	/**
 	 * Seconds in the air: neither on the ground nor on a wall, with a car that isn't demolished.
 	 * Needs the `SPECTATOR` `bOnGround` / `bOnWall` fields. The game reports `bOnGround` only with
-	 * 3 or more wheels down, so driving on 2 wheels counts as air time.
+	 * 3 or more wheels down, so driving on 2 wheels counts as air time. Driving on the ceiling counts
+	 * as ground (the game sends `bOnGround: true`, `bOnWall: false`).
 	 */
 	airTime: number;
 	/** Seconds driving on a wall (`SPECTATOR` `bOnWall`), with a car that isn't demolished. */
 	onWallTime: number;
 	/**
-	 * Average speed in Unreal Units/second. Use `toKmh()` / `toMph()` (or `convertSpeed()`) for km/h or mph.
+	 * Average speed in km/h, the unit the game sends. Use `toMph()` (or `convertSpeed()`) for mph.
 	 * Only live play with a car that isn't demolished counts. Needs the `SPECTATOR` `Speed` field;
 	 * `0` when it was never sent.
 	 */
@@ -217,9 +218,19 @@ function hasSpeed(player: Player): player is Player & { Speed: number } {
 	return player.bHasCar !== false && player.bDemolished !== true && typeof player.Speed === 'number' && Number.isFinite(player.Speed);
 }
 
-/** `true` when the car is airborne (only known while spectating). */
+/** `true` when the `SPECTATOR` car fields are sent for this player. */
+function hasCarState(player: Player): boolean {
+	return typeof player.Boost === 'number' || typeof player.Speed === 'number' || player.bOnGround !== undefined || player.bOnWall !== undefined;
+}
+
+/**
+ * `true` when the car is airborne (only known while spectating). A missing `bOnGround` / `bOnWall`
+ * counts as `false`, as long as the player's other car fields are sent.
+ */
 function isInAir(player: Player): boolean {
-	return player.bHasCar !== false && player.bDemolished !== true && player.bOnGround === false && player.bOnWall === false;
+	return (
+		hasCarState(player) && player.bHasCar !== false && player.bDemolished !== true && player.bOnGround !== true && player.bOnWall !== true
+	);
 }
 
 /**
@@ -243,6 +254,8 @@ export class MatchTracker {
 	#sawRoundStart = false;
 	#paused = false;
 	#ended = false;
+	/** `false` after a counted `CrossbarHit` until the ball is touched again: one hit per touch. */
+	#crossbarArmed = true;
 	#winnerTeamNum: TeamNum | undefined;
 	#lastClock: number | undefined;
 	#lastGame: Game | undefined;
@@ -335,6 +348,7 @@ export class MatchTracker {
 		this.#sawRoundStart = false;
 		this.#paused = false;
 		this.#ended = false;
+		this.#crossbarArmed = true;
 		this.#winnerTeamNum = undefined;
 		this.#lastClock = undefined;
 		this.#lastGame = undefined;
@@ -385,6 +399,10 @@ export class MatchTracker {
 			case 'RoundStarted':
 				this.#roundActive = true;
 				this.#sawRoundStart = true;
+				this.#crossbarArmed = true;
+				break;
+			case 'BallHit':
+				this.#crossbarArmed = true;
 				break;
 			case 'CountdownBegin':
 			case 'GoalScored':
@@ -397,7 +415,12 @@ export class MatchTracker {
 				this.#paused = false;
 				break;
 			case 'CrossbarHit':
-				if (this.#counting()) this.#crossbarHit(event.Data.BallLastTouch.Player, event.Data.BallLocation.Y);
+				// The game can send several CrossbarHit for one impact (the ball rolling on the bar, post then bar):
+				// only the first one after each touch counts.
+				if (this.#counting() && this.#crossbarArmed) {
+					this.#crossbarArmed = false;
+					this.#crossbarHit(event.Data.BallLastTouch.Player, event.Data.BallLocation.Y);
+				}
 				break;
 			case 'UpdateState':
 				if (!this.#ended) this.#tick(event.Data.Game, event.Data.Players, event.Data.MatchGuid);

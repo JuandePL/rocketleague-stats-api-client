@@ -49,9 +49,9 @@ export interface BallHitData extends BaseEventData {
 	Players: PlayerRef[];
 	/** Ball state at the moment of the hit. */
 	Ball: {
-		/** Ball speed before the hit (Unreal Units/second). */
+		/** Ball speed before the hit, in km/h. */
 		PreHitSpeed: number;
-		/** Ball speed after the hit (Unreal Units/second). */
+		/** Ball speed after the hit, in km/h. */
 		PostHitSpeed: number;
 		/** World position of the ball at impact. */
 		Location: Vector;
@@ -90,7 +90,7 @@ export interface CountdownBeginData extends BaseEventData {}
 export interface CrossbarHitData extends BaseEventData {
 	/** World position of the ball when the impact occurred. */
 	BallLocation: Vector;
-	/** Ball speed on impact. */
+	/** Ball speed on impact, in km/h. */
 	BallSpeed: number;
 	/** Impact force of the ball relative to the crossbar normal. */
 	ImpactForce: number;
@@ -109,7 +109,7 @@ export interface GoalReplayWillEndData extends BaseEventData {}
 
 /** Sent when a goal is scored. */
 export interface GoalScoredData extends BaseEventData {
-	/** Speed of the ball (Unreal Units/second) when it crossed the goal line. */
+	/** Speed of the ball when it crossed the goal line, in km/h. */
 	GoalSpeed: number;
 	/** Length of the previous round in seconds (not the match clock). */
 	GoalTime: number;

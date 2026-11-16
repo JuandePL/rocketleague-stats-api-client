@@ -16,7 +16,6 @@ import {
 	timeFromPlayerLeftTo,
 	timeFromPlayerLeftToMatchEnd,
 	timeFromPlayerLeftToNextGoal,
-	toKmh,
 	toMph,
 	type AnyEventListener,
 	type Game,
@@ -80,8 +79,14 @@ class Match {
 	goal() {
 		this.send(ev('GoalScored', { ...fixtures.GoalScored }));
 	}
-	/** `name` sends the ball against the crossbar of the goal at `y` (negative = blue goal). */
+	/** `name` touches the ball and sends it against the crossbar of the goal at `y` (negative = blue goal). */
 	crossbar(name: string, y: number) {
+		const { Name, Shortcut, TeamNum } = this.players.find((p) => p.Name === name)!;
+		this.send(ev('BallHit', { Players: [{ Name, Shortcut, TeamNum }], Ball: { PreHitSpeed: 0, PostHitSpeed: 1500, Location: { X: 0, Y: 0, Z: 0 } } }));
+		this.bounce(name, y);
+	}
+	/** A `CrossbarHit` with no touch before it, as the game sends again while the ball stays on the bar. */
+	bounce(name: string, y: number) {
 		const { Name, Shortcut, TeamNum } = this.players.find((p) => p.Name === name)!;
 		this.send(
 			ev('CrossbarHit', {
@@ -115,12 +120,11 @@ class Match {
 }
 
 describe('helpers', () => {
-	it('converts Unreal Units/second to km/h and mph', () => {
-		expect(toKmh(2200)).toBeCloseTo(79.2); // supersonic
-		expect(toMph(2200)).toBeCloseTo(49.21, 2);
-		expect(toKmh(0)).toBe(0);
-		expect(convertSpeed(1000, 'kmh')).toBeCloseTo(36);
-		expect(convertSpeed(1000, 'mph')).toBe(toMph(1000));
+	it('converts game speeds (km/h) to mph', () => {
+		expect(toMph(160.9344)).toBeCloseTo(100);
+		expect(toMph(0)).toBe(0);
+		expect(convertSpeed(80, 'kmh')).toBe(80);
+		expect(convertSpeed(80, 'mph')).toBe(toMph(80));
 	});
 
 	it('formats the match clock with two-digit minutes by default', () => {
@@ -534,6 +538,66 @@ describe('MatchTracker', () => {
 		});
 	});
 
+	describe('missing car fields', () => {
+		it('counts air time when the game leaves out bOnGround / bOnWall instead of sending false', () => {
+			const { tracker, match } = setup();
+			const [ana, bob] = match.players as [Player, Player];
+			ana.bOnGround = undefined;
+			ana.bOnWall = undefined; // in the air, both left out
+			bob.bOnGround = true;
+			match.start();
+			match.play(4);
+			const air = (name: string) => tracker.getStats().players.find((p) => p.Name === name)?.airTime;
+			expect(air('Ana')).toBeCloseTo(4);
+			expect(air('Bob')).toBe(0);
+		});
+
+		it('counts no air time when the car fields are not sent at all (not spectating)', () => {
+			const { tracker, match } = setup();
+			match.players = [player('Ana', 0, { Speed: undefined, bOnGround: undefined, bOnWall: undefined, bHasCar: undefined })];
+			match.start();
+			match.play(4);
+			expect(tracker.getStats().players[0]?.airTime).toBe(0);
+		});
+	});
+
+	describe('live series after a finished series', () => {
+		it('shows the new series while its first match is played (autoStart)', () => {
+			const series = new EsportsSeries(undefined, { games: 1 });
+			const match = new Match((event) => series.tracker.handle(event));
+			match.players = [player('Ana', 0, { Score: 100, Goals: 3 }), player('Bob', 1, { Score: 50 })];
+			match.start();
+			match.play(3);
+			match.end(0, [3, 0]);
+			expect(series.status).toBe('finished');
+
+			match.players = [player('Ana', 0, { Score: 20, Goals: 1 }), player('Bob', 1, { Score: 10 })];
+			match.teams[0]!.Score = 1;
+			match.teams[1]!.Score = 0;
+			match.start();
+			match.play(2);
+
+			const live = series.getLiveResult();
+			expect(live).toMatchObject({ status: 'running', finished: false, winner: undefined, matches: [] });
+			expect(live.players.find((p) => p.Name === 'Ana')).toMatchObject({ Goals: 1, matches: 1 });
+			expect(live.teams.find((t) => t.name === 'Blue')).toMatchObject({ wins: 0, goals: 1 });
+			// The finished series is still readable until this match ends.
+			expect(series.getResult()).toMatchObject({ status: 'finished', winner: 'Blue' });
+			expect(series.getResult().players.find((p) => p.Name === 'Ana')?.Goals).toBe(3);
+		});
+
+		it('keeps the finished series after stop()', () => {
+			const series = new EsportsSeries(undefined, { games: 1 });
+			const match = new Match((event) => series.tracker.handle(event));
+			match.start();
+			match.end(0, [1, 0]);
+			series.stop();
+			match.start();
+			match.play(2);
+			expect(series.getLiveResult()).toEqual(series.getResult());
+		});
+	});
+
 	describe('average speed', () => {
 		it('averages Speed over live ticks, skipping demolished, paused and countdown ticks', () => {
 			const { tracker, match } = setup();
@@ -603,6 +667,19 @@ describe('MatchTracker', () => {
 			const crossbar = (name: string) => tracker.getStats().players.find((p) => p.Name === name)?.crossbar;
 			expect(crossbar('Ana')).toEqual({ attack: 2, defense: 1, total: 3 });
 			expect(crossbar('Bob')).toEqual({ attack: 1, defense: 1, total: 2 });
+		});
+
+		it('counts one hit per touch when the game sends several for one impact', () => {
+			const { tracker, match } = setup();
+			match.start();
+			match.crossbar('Ana', 5100);
+			match.bounce('Ana', 5100); // same impact, sent again
+			match.bounce('Ana', 5100);
+			match.tick();
+			match.bounce('Ana', 5100); // still no touch since: post then bar
+			expect(tracker.getStats().players.find((p) => p.Name === 'Ana')?.crossbar.total).toBe(1);
+			match.crossbar('Ana', 5100); // touched again: a new hit
+			expect(tracker.getStats().players.find((p) => p.Name === 'Ana')?.crossbar.total).toBe(2);
 		});
 
 		it('ignores hits during a pause or a goal replay', () => {

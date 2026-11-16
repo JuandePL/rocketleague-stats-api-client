@@ -75,7 +75,7 @@ export interface SeriesPlayerResult {
 	airTime: number;
 	/** Seconds driving on a wall (see `TrackedPlayerStats.onWallTime`). */
 	onWallTime: number;
-	/** Average speed over the series in Unreal Units/second, weighted by `drivingTime` (see `TrackedPlayerStats.averageSpeed`). */
+	/** Average speed over the series in km/h, weighted by `drivingTime` (see `TrackedPlayerStats.averageSpeed`). */
 	averageSpeed: number;
 	/** Seconds the player's speed was measured over the series. */
 	drivingTime: number;
@@ -326,26 +326,30 @@ export class EsportsSeries {
 	 *
 	 * - The current match adds goals, boost, possession and player stats, but no win until it ends.
 	 * - `matches` still holds only the finished matches. The current match is in `tracker`.
-	 * - Only while the series is `running`: otherwise it is the same as `getResult()`. That includes a finished
-	 *   series with `autoStart`, whose next match belongs to the next series.
+	 * - After a series finished with `autoStart`, a match being played is the first of the next series: the
+	 *   live result is then that new series (`status: 'running'`, no finished matches yet), while `getResult()`
+	 *   keeps the finished one until that match ends.
+	 * - With no match being played, or when the series is `idle` or `stopped`, it is the same as `getResult()`.
 	 */
 	getLiveResult(): SeriesResult {
-		if (this.#status !== 'running' || !this.tracker.matchInProgress) return this.getResult();
+		if (!this.tracker.matchInProgress) return this.getResult();
 		const current: CountedMatch = { ...this.tracker.getStats(), teams: this.tracker.getTeams(), playerResults: this.tracker.getPlayerResults() };
-		return this.#result(this.#matches, [...this.#matches, current]);
+		if (this.#status === 'running') return this.#result(this.#matches, [...this.#matches, current]);
+		if (this.#status === 'finished' && this.#autoStart && !this.#stoppedByUser) return this.#result([], [current], 'running');
+		return this.getResult();
 	}
 
-	#result(matches: MatchSummary[], counted: readonly CountedMatch[] = matches): SeriesResult {
+	#result(matches: MatchSummary[], counted: readonly CountedMatch[] = matches, status: SeriesStatus = this.#status): SeriesResult {
 		const teams = this.#teams(counted);
 		const players = this.#players(counted);
-		const over = this.#status === 'finished' || this.#status === 'stopped';
+		const over = status === 'finished' || status === 'stopped';
 		const [first, second] = teams;
 		const winner = over && first && (!second || first.wins > second.wins) ? first.name : undefined;
 		const mvp = (winner ? players.find((player) => player.team === winner) : undefined) ?? players[0];
 		return {
-			status: this.#status,
+			status,
 			options: { ...this.#options },
-			finished: this.#status === 'finished',
+			finished: status === 'finished',
 			matches: [...matches],
 			teams,
 			winner,

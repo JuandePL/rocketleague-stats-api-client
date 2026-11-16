@@ -113,25 +113,19 @@ export function getTeamTotals(players: readonly Player[]): { blue: TeamTotals; o
 /** Speed units accepted by {@link convertSpeed}. */
 export type SpeedUnit = 'kmh' | 'mph';
 
-/** Unreal Units/second to km/h: 1 uu = 1 cm. */
-const UU_PER_SECOND_TO_KMH = 0.036;
-/** Unreal Units/second to mph: 1 mile = 160 934.4 cm. */
-const UU_PER_SECOND_TO_MPH = 3600 / 160_934.4;
+/** km/h to mph: 1 mile = 1.609344 km. */
+const KMH_TO_MPH = 1 / 1.609344;
 
 /**
- * Converts a speed from Unreal Units/second (as the game sends `Speed`, `GoalSpeed`, `averageSpeed`, …)
- * to km/h or mph. Supersonic (2200 uu/s) is 79.2 km/h or about 49.2 mph.
+ * Converts a speed from the game to `unit`. Every speed the game sends (`Speed`, `GoalSpeed`, `BallSpeed`,
+ * `Game.Ball.Speed`, `averageSpeed`, …) is already in km/h, so `'kmh'` returns it as is. Handy when the unit
+ * is a setting. Supersonic is about 79 km/h, or 49 mph.
  */
-export function convertSpeed(uuPerSecond: number, unit: SpeedUnit): number {
-	return uuPerSecond * (unit === 'kmh' ? UU_PER_SECOND_TO_KMH : UU_PER_SECOND_TO_MPH);
+export function convertSpeed(kmh: number, unit: SpeedUnit): number {
+	return unit === 'mph' ? kmh * KMH_TO_MPH : kmh;
 }
 
-/** Unreal Units/second to km/h. Same as `convertSpeed(uuPerSecond, 'kmh')`. */
-export function toKmh(uuPerSecond: number): number {
-	return convertSpeed(uuPerSecond, 'kmh');
-}
-
-/** Unreal Units/second to mph. Same as `convertSpeed(uuPerSecond, 'mph')`. */
-export function toMph(uuPerSecond: number): number {
-	return convertSpeed(uuPerSecond, 'mph');
+/** km/h (as the game sends speeds) to mph. Same as `convertSpeed(kmh, 'mph')`. */
+export function toMph(kmh: number): number {
+	return kmh * KMH_TO_MPH;
 }
