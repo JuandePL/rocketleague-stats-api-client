@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-17
+
 ### Added
 
 - `MatchTracker` tracks live stats of the current match ([#11]):
@@ -90,7 +92,8 @@ First stable release, published as `@juande_pl/rocketleague-stats-api-client`.
 
 - The package was renamed from `rocketleague-stats-api-client` to `@juande_pl/rocketleague-stats-api-client`.
 
-[Unreleased]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/JuandePL/rocketleague-stats-api-client/releases/tag/v1.0.0
 [#1]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/1
