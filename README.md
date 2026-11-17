@@ -5,13 +5,60 @@ Fully typed WebSocket client for the official [Rocket League Stats API](https://
 - Typed interfaces for all 22 events and 6 commands
 - Type guards that validate each message at runtime (enabled by default)
 - `RocketLeagueStatsClient`: connects automatically, reconnects with backoff, and gives you typed `on()` / `onAny()` / `send()`
+- Match stats (possession, boost, air time, speed…) and an esports mode that records whole series
 - No runtime dependencies. Works in Node.js >= 22 and in browsers. ESM and CommonJS builds.
+
+## Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Enable the Stats API in Rocket League](#enable-the-stats-api-in-rocket-league)
+  - [Automatic setup (Node.js)](#automatic-setup-nodejs)
+- [Client](#client)
+  - [Options](#options)
+  - [Listening to events](#listening-to-events)
+  - [Lifecycle events](#lifecycle-events)
+  - [Sending commands](#sending-commands)
+- [Sorting players](#sorting-players)
+- [Match stats](#match-stats)
+- [Esports mode](#esports-mode)
+- [Type guards](#type-guards)
+- [Known quirks](#known-quirks)
+- [Documentation](#documentation)
+- [Development](#development)
+- [License](#license)
 
 ## Install
 
 ```sh
 npm install @juande_pl/rocketleague-stats-api-client
 ```
+
+## Quick start
+
+```ts
+import { RocketLeagueStatsClient } from "@juande_pl/rocketleague-stats-api-client";
+
+const client = new RocketLeagueStatsClient(); // ws://127.0.0.1:49124, connects automatically
+
+// A single event: `data` is typed as GoalScoredData
+client.on('GoalScored', (data) => {
+  console.log(`${data.Scorer.Name} scored at ${data.GoalSpeed} km/h`);
+});
+
+// Every event, as a discriminated union
+client.onAny((event) => {
+  if (event.Event === 'StatfeedEvent') {
+    console.log(event.Data.MainTarget.Name, event.Data.EventName);
+  }
+});
+
+// Commands: checked at compile time and validated at runtime
+client.send('ChangePOV', { Focus: '1', Perspective: 'PlayerView' });
+client.send({ Command: 'SetHUDVisibility', Data: { bVisible: false } });
+```
+
+More in [examples/](examples/).
 
 ## Enable the Stats API in Rocket League
 
@@ -47,29 +94,7 @@ const config = await client.statsApiConfig;
 
 The helpers are exported from `@juande_pl/rocketleague-stats-api-client/node`. Run the check on its own with `ensureStatsApiEnabled(options)`, or use `editPacketSendRate(content)` to edit the `.ini` text without touching the disk.
 
-## Usage
-
-```ts
-import { RocketLeagueStatsClient } from "@juande_pl/rocketleague-stats-api-client";
-
-const client = new RocketLeagueStatsClient(); // ws://127.0.0.1:49124, connects automatically
-
-// A single event: `data` is typed as GoalScoredData
-client.on('GoalScored', (data) => {
-  console.log(`${data.Scorer.Name} scored at ${data.GoalSpeed} km/h`);
-});
-
-// Every event, as a discriminated union
-client.onAny((event) => {
-  if (event.Event === 'StatfeedEvent') {
-    console.log(event.Data.MainTarget.Name, event.Data.EventName);
-  }
-});
-
-// Commands: checked at compile time and validated at runtime
-client.send('ChangePOV', { Focus: '1', Perspective: 'PlayerView' });
-client.send({ Command: 'SetHUDVisibility', Data: { bVisible: false } });
-```
+## Client
 
 ### Options
 
@@ -83,9 +108,9 @@ new RocketLeagueStatsClient({
   reconnect: true,       // or false, or { initialDelay, maxDelay, factor, maxAttempts }
   validateEvents: true,  // run type guards on incoming events
   ignoreReplayEndGoal: true, // drop the fake GoalScored sent when a replay ends
-  sortPlayers: undefined, // sort UpdateState.Players (see below). Default: the game's order
+  sortPlayers: undefined, // sort UpdateState.Players (see Sorting players). Default: the game's order
   WebSocket: undefined,  // custom implementation, defaults to globalThis.WebSocket
-  ensureStatsApi: true,  // Node.js only: enable PacketSendRate in the .ini (see above)
+  ensureStatsApi: true,  // Node.js only: enable PacketSendRate in the .ini (see Automatic setup)
 });
 ```
 
@@ -93,7 +118,7 @@ With `autoConnect: true`, the connection opens on the next microtask, so listene
 
 On Node.js < 22, pass the `ws` package: `new RocketLeagueStatsClient({ WebSocket: (await import('ws')).default })`.
 
-### Listening
+### Listening to events
 
 | Method                          | Description                                                                 |
 | ------------------------------- | --------------------------------------------------------------------------- |
@@ -106,7 +131,7 @@ On Node.js < 22, pass the `ws` package: `new RocketLeagueStatsClient({ WebSocket
 
 Game event listeners receive `(data, event)`: the typed payload and the full `{ Event, Data }` message.
 
-Lifecycle events:
+### Lifecycle events
 
 | Name             | Arguments                                   |
 | ---------------- | ------------------------------------------- |
@@ -160,178 +185,57 @@ const custom = sortPlayers(data.Players, (a, b) => a.Demos - b.Demos);
 
 The first comparator decides and the next ones break ties. The sort is stable, so players that compare equal keep the game's order.
 
-## Match stats and esports mode
+## Match stats
 
-### Quick helpers
-
-These work on any player list, such as `UpdateState.Players`:
+Quick helpers for any player list, and a `MatchTracker` that follows the whole match:
 
 ```ts
-import { getMvp, getTopPlayer, getTeamTotals } from '@juande_pl/rocketleague-stats-api-client';
+import { getMvp, getTopPlayer, getTeamTotals, toMph, MatchTracker } from '@juande_pl/rocketleague-stats-api-client';
 
-getMvp(data.Players, winnerTeamNum);  // highest score on the winning team (ties: goals, assists, saves, shots)
+getMvp(data.Players, winnerTeamNum);  // highest score on the winning team
 getTopPlayer(data.Players, 'Saves');  // player with the most saves
 getTeamTotals(data.Players);          // { blue: { Score, Goals, Shots, ... }, orange: { ... } }
-```
-
-Every speed from the game (`Speed`, `GoalSpeed`, `BallSpeed`, `Game.Ball.Speed`, `averageSpeed`, …) is in km/h. For mph:
-
-```ts
-import { convertSpeed, toMph } from '@juande_pl/rocketleague-stats-api-client';
-
-toMph(data.GoalSpeed);             // km/h → mph
-convertSpeed(data.GoalSpeed, unit); // unit: 'kmh' (as is) or 'mph', handy when it is a setting
-```
-
-### `MatchTracker`: possession, boost, air time, speed and crossbar hits
-
-```ts
-import { MatchTracker } from '@juande_pl/rocketleague-stats-api-client';
+toMph(data.GoalSpeed);                // every speed from the game is in km/h
 
 const tracker = new MatchTracker(client);
-const stats = tracker.getStats(); // any time during the match
-const live = tracker.getPlayerResults(); // live scoreboard + tracked stats per player
+tracker.getStats();         // possession, boost used, air time, wall time, average speed, crossbar hits
+tracker.getPlayerResults(); // live scoreboard + tracked stats per player
 tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possession.percent));
 ```
 
-| Stat                | How it is computed                                                                                     |
-| ------------------- | ------------------------------------------------------------------------------------------------------ |
-| `possession`        | Time each team was the last to touch the ball (`Game.Ball.TeamNum`). In seconds and in percent.        |
-| `boost`             | Each tick, how much each player's boost went down, summed per player and per team. Pickups and demolitions don't count. |
-| `players[].airTime` | Seconds each player spent in the air: neither on the ground nor on a wall, and not demolished.          |
-| `players[].onWallTime` | Seconds each player spent driving on a wall (`bOnWall`), not demolished.                            |
-| `players[].averageSpeed` | Average car speed (`Speed`) in km/h, not demolished. `toMph()` converts it. `drivingTime` is the time it covers. |
-| `players[].crossbar` | Crossbar and post hits (`CrossbarHit`) by each player: `attack` on the opponent's goal, `defense` on their own goal. One per touch: the extra `CrossbarHit` the game sends for the same impact are ignored. |
+The tracker only counts time with the ball in play, freezes while the match is paused, keeps players who leave early (with when they left), and records every join, leave and team change.
 
-Only time with the ball in play counts. Kickoff countdowns and goal replays are excluded, and overtime is counted. **While the match is paused (`MatchPaused` until `MatchUnpaused`), everything is frozen:** time, possession, boost usage, air time, wall time, speed and crossbar hits. Check `tracker.paused` to know if it is paused. The tracker resets on its own when a new match starts.
+**Full reference: [docs/match-stats.md](docs/match-stats.md)**, including how each stat is computed, the `MatchSummary`, time between moments (`timeFromPlayerLeftToMatchEnd`…) and the limitations.
 
-When the match ends, it gives you a `MatchSummary` with the teams, the winner and the MVP. Its `playerResults` has one entry per player: `PrimaryId`, the scoreboard (`Score`, `Goals`, `Assists`, `Saves`, `Shots`, …), `team`, `mvp`, `leftEarly`, `boostUsed`, `airTime`, `onWallTime`, `averageSpeed`, `drivingTime` and `crossbar`. The raw scoreboard sent by the game is in `scoreboard`.
+## Esports mode
 
-**Live player results:** `tracker.getPlayerResults()` gives the same entries as `playerResults` at any time, so you can show them on every `UpdateState`. While the match is running, `mvp` marks the provisional MVP (best player of the leading team, or of everyone on a tie) and `leftEarly` marks players who are not in the match right now. `tracker.matchInProgress` tells if a match is being tracked.
-
-**Players who leave before the end (rage quit, disconnect)** stay in `playerResults` with `leftEarly: true` and the stats they had when they were last seen. They can't be MVP. A player who leaves and comes back before the end counts as a normal player.
-
-`leftAt` tells when they left:
-- `clock`: the match clock as text, like `"02:35"`, or `"+01:10"` in overtime.
-- `timeSeconds` and `overtime`: the same clock as raw values.
-- `secondsPlayed`: seconds of play until then.
-- `date`: the real time.
-
-**Joins, leaves and team changes:** every player result has `sessions`, one entry per stretch of time the player was in the match:
-
-```ts
-sessions: [
-  { team: 'Blue', TeamNum: 0, joinedAt: MatchMoment, leftAt: MatchMoment, switchedTeam: false }, // left
-  { team: 'Blue', TeamNum: 0, joinedAt: MatchMoment, switchedTeam: false },                      // came back, still in at the end
-],
-joins: 2,  // times the player entered, the first time included
-leaves: 1, // times the player left before the end
-```
-
-- A team change ends the session (`switchedTeam: true`) and starts a new one on the new team. It counts as neither a join nor a leave.
-- `leftAt` is the last `UpdateState` the player was in, so the real exit is at most one tick later. An open session (no `leftAt`) means the player was in at the end, or is in right now for `getPlayerResults()`.
-- They come from `UpdateState`, so they work for bots too, and they include the team. `PlayerJoined` / `PlayerLeft` are in the `timeline` too, without the team.
-
-`formatMatchClock(timeSeconds, overtime)` formats any clock value the same way. Minutes have two digits by default. Pass `{ padMinutes: false }` for `"2:35"`.
-
-#### Time between a player leaving and the end, a goal, or any event
-
-```ts
-import { timeFromPlayerLeftToMatchEnd, timeFromPlayerLeftToNextGoal, timeFromPlayerLeftTo, timeBetween } from '@juande_pl/rocketleague-stats-api-client';
-
-timeFromPlayerLeftToMatchEnd(summary, player);        // { secondsPlayed, clockSeconds, realSeconds } until the match ended
-timeFromPlayerLeftToNextGoal(summary, player);   // until the next goal, by any team
-timeFromPlayerLeftTo(summary, player, 'GoalScored', (e) => e.Data.Scorer.TeamNum !== player.TeamNum); // until their team conceded
-timeFromPlayerLeftTo(summary, player, 'StatfeedEvent', (e) => e.Data.EventName === 'Save');              // any event, with an optional filter
-timeBetween(summary.goals[0].moment, summary.endMoment);                                           // any two moments
-```
-
-- **Return value:** `undefined` if the player didn't leave early, or if no such event happened after they left.
-- **`player`:** a `MatchPlayerResult` or its `key`.
-- **The three measures:**
-  - `secondsPlayed`: play time only. Countdowns, replays and pauses are left out.
-  - `clockSeconds`: time on the match clock. Regulation time and overtime add up.
-  - `realSeconds`: real time.
-- **Where the moments come from:** every `MatchSummary` has `endMoment`, `goals` (each with its `moment`) and `timeline`. The timeline holds every event of the match except `UpdateState`, each with the moment it arrived. Live, use `tracker.getTimeline()` and `tracker.getMoment()`.
-
-> **Limitations:**
-> - There is no field domination (time the ball spends in each half): `UpdateState` doesn't send the ball position. It will be added if a future Stats API update includes it.
-> - `Boost`, `Speed`, `bOnGround` and `bOnWall` are `SPECTATOR` fields, so boost usage, speed, air time and wall time are only tracked while spectating.
-> - The game sets `bOnGround` only with 3 or more wheels down, so driving on 2 wheels counts as air time.
-> - On the ceiling, the game sends `bOnGround: true` and `bOnWall: false`, so ceiling time counts as ground: neither air time nor wall time.
-
-### `EsportsSeries`: esports mode
-
-Records series of matches in memory and gives you the results. By default it records on its own: the series starts right away, and a new one starts after each series ends.
+`EsportsSeries` records best-of or play-all series in memory and gives you team and player totals, the winner and the series MVP:
 
 ```ts
 import { EsportsSeries } from '@juande_pl/rocketleague-stats-api-client';
 
-const series = new EsportsSeries(client);                    // best of 5, recording right away
-const bo7 = new EsportsSeries(client, { games: 7 });         // best of 7
-const manual = new EsportsSeries(client, { autoStart: false }); // nothing is recorded until start()
-
-series.onSeriesStart((options) => console.log(`New series: best of ${options.games}`));
-series.onMatchEnd((match, result) => console.log(`Game ${result.matches.length}: MVP ${match.mvp?.Name}`));
+const series = new EsportsSeries(client, { games: 5 }); // best of 5, recording right away
 series.onSeriesEnd((result) => console.log(`${result.winner} wins the series. MVP: ${result.mvp?.Name}`));
-
-series.start({ games: 5 });                       // best of 5: ends when a team wins 3
-series.start({ games: 3, format: 'play-all' });   // plays all 3 matches
-series.stop();                                    // stops recording, keeps the results
-series.restart();                                 // same options, clears the stored matches
-series.getResult();                               // standings at any time (check `finished`)
-series.getLiveResult();                           // the same, also counting the match being played
-series.tracker.getStats();                        // live stats of the current match
+series.getLiveResult(); // standings, also counting the match being played
 ```
 
-| Method / property      | Description                                                                                   |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| `new EsportsSeries(client, { games, format, autoStart })` | `games` defaults to `5`, `format` to `'best-of'`, `autoStart` to `true`. |
-| `start({ games, format })` | Starts a series. Clears any stored matches. `format`: `'best-of'` (default) or `'play-all'`. |
-| `restart()`            | Starts again with the same options. Clears the stored matches.                                |
-| `stop()`               | Stops recording, and the automatic restart until the next `start()` or `restart()`. The matches played so far stay in `getResult()`. |
-| `getResult()`          | `{ status, finished, matches, teams, winner, players, mvp }`, with the finished matches.      |
-| `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. After a series finished with `autoStart`, it already shows the new series during its first match. Cheap enough for every `UpdateState`. |
-| `status`               | `'idle'`, `'running'`, `'finished'` or `'stopped'`.                                           |
-| `onSeriesStart` / `onMatchEnd` / `onSeriesEnd` | Listeners. `onSeriesStart` also fires on automatic restarts. Each returns an unsubscribe function. |
-| `dispose()`            | Stops listening to the client.                                                                 |
-
-- **Teams are identified by name** (`Game.Teams[].Name`), so they can switch sides between matches. Give them distinct names in the private match settings.
-- **Players are identified by their `key`.** By default it comes from `playerKey()`:
-  - **Real accounts:** the `PrimaryId` (e.g. `"Steam|7656119...|0"`). A player who changes their name stays one player, and `names` lists every name they used. Splitscreen players get different ids, so they stay apart.
-  - **Bots:** they all share `"Unknown|0|0"`, so their key is `"bot:" + name`. Results have `bot: true` for them.
-  - **Your own rule:** pass `identifyPlayer` to `EsportsSeries` or `MatchTracker`, for example to merge someone's Steam and Epic accounts:
-    ```ts
-    new EsportsSeries(client, { identifyPlayer: (p) => (p.PrimaryId && aliases[p.PrimaryId]) || playerKey(p) });
-    ```
-- **Per-team results** include wins, goals, boost used and possession over the whole series.
-- **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, average speed (weighted by `drivingTime`), crossbar hits (attack and defense), matches played, matches left early (`leftEarly`), joins and leaves summed over the matches, and the number of MVPs.
-- **Per-match player results:** each match in `result.matches` keeps its own `playerResults`.
-- **Which matches count:** only matches that end (`MatchEnded`) while the series is running are recorded.
-- **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match ends. That match then becomes the first of the new series.
+**Full reference: [docs/esports-series.md](docs/esports-series.md)**, including every method, how teams and players are identified, and which matches count.
 
 ## Type guards
 
 Every guard is exported, so you can validate messages from any source (the TCP port, recordings, a relay server…):
 
 ```ts
-import { isStatsApiEvent, isGoalScoredData, isEventData, isStatsApiCommand, parseEventMessage } from '@juande_pl/rocketleague-stats-api-client';
+import { isStatsApiEvent, isGoalScoredData, parseEventMessage } from '@juande_pl/rocketleague-stats-api-client';
 
-isGoalScoredData(payload);                 // payload is GoalScoredData
-isEventData('BallHit', payload);           // payload is BallHitData
-isStatsApiEvent(message);                  // message is StatsApiEvent
-isStatsApiEvent(message, 'MatchEnded');    // message is StatsApiEventOf<'MatchEnded'>
-isStatsApiCommand(command, 'ChangePOV');   // command is StatsApiCommandOf<'ChangePOV'>
+isGoalScoredData(payload);              // payload is GoalScoredData
+isStatsApiEvent(message, 'MatchEnded'); // message is StatsApiEventOf<'MatchEnded'>
 
-// Decodes the wire format ({ Event, Data: "<json string>" }). Never throws.
-const result = parseEventMessage(rawText);
+const result = parseEventMessage(rawText); // decodes the wire format. Never throws.
 if (result.ok) console.log(result.event.Event);
-else console.warn(result.reason); // 'invalid-json' | 'invalid-envelope' | 'invalid-data-json' | 'unknown-event' | 'invalid-data'
 ```
 
-Guards accept extra, undocumented fields, so new fields added by a game update don't break validation. Fields the docs mark `SPECTATOR` or `CONDITIONAL` (and `MatchGuid`, which is only set online or on LAN) are optional.
-
-The building blocks (`shape`, `optional`, `arrayOf`, `oneOf`, `isString`, `isNumber`, …) are exported too.
+**Full reference: [docs/type-guards.md](docs/type-guards.md).**
 
 ## Known quirks
 
@@ -342,6 +246,16 @@ The building blocks (`shape`, `optional`, `arrayOf`, `oneOf`, `isString`, `isNum
 - A car on the ceiling is reported as `bOnGround: true`, `bOnWall: false`, the same as on the ground.
 - When a replay ends, the game sends a fake `GoalScored` event whose `Scorer` is `{ "Name": "", "Shortcut": 0, "TeamNum": 0 }`. The client drops it by default. Pass `ignoreReplayEndGoal: false` to receive it, and use `isReplayEndGoal(event)` to detect it yourself.
 
+## Documentation
+
+| Page | What it covers |
+| ---- | -------------- |
+| [Match stats](docs/match-stats.md) | Quick helpers, speed units, `MatchTracker`, players who leave early, joins and team changes, time between moments, limitations. |
+| [Esports mode](docs/esports-series.md) | `EsportsSeries`: series formats, identifying teams and players, series results. |
+| [Type guards](docs/type-guards.md) | Validating messages, `parseEventMessage`, guard building blocks. |
+| [Examples](examples/) | Runnable scripts: basic usage, commands, esports. |
+| [Changelog](CHANGELOG.md) | Changes between versions. |
+
 ## Development
 
 ```sh
@@ -351,7 +265,7 @@ npm test
 npm run build
 ```
 
-CI runs the same checks on every pull request, on Node.js 22 and 24, on Linux and Windows. Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md).
+CI runs the same checks on every pull request, on Node.js 22 and 24, on Linux and Windows.
 
 ## License
 
