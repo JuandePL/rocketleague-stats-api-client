@@ -63,8 +63,10 @@ See also [examples/esports.ts](../examples/esports.ts).
 
 ## What the results include
 
-- **Per-team results** include wins, goals, boost used and possession over the whole series.
-- **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, average speed (weighted by `drivingTime`), crossbar hits (attack and defense), matches played, matches left early (`leftEarly`), joins and leaves summed over the matches, and the number of MVPs.
+- **Per-team results** include matches played, wins and `winPercent`, goals, shots and `shootingPercent`, boost used and `boostPerMinute`, play time (`secondsPlayed`) and possession over the whole series.
+- **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, average speed (weighted by `drivingTime`), crossbar hits (attack and defense), matches played, matches left early (`leftEarly`), joins and leaves summed over the matches, and the number of MVPs. Also wins and `winPercent`, `shootingPercent`, `goalParticipation` (over `teamGoals`, the goals of their team in each match they played), `secondsPlayed` and `boostPerMinute`.
+- **Rates over the series** are computed from the totals, not averaged per match: `shootingPercent` is all goals over all shots, and `boostPerMinute` all boost over all play time. See [Rates and percentages](match-stats.md#rates-and-percentages).
+- **`winPercent`** counts only finished matches. In `getLiveResult()`, the match being played adds to `matches` but not to `winPercent`.
 - **Per-match player results:** each match in `result.matches` keeps its own `playerResults` (see [Match summary](match-stats.md#match-summary)).
 
 ## Which matches count

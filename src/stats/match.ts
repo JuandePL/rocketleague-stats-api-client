@@ -4,6 +4,8 @@ import type { EventName, GoalScoredData, StatsApiEvent, StatsApiEventOf } from '
 import {
 	getMvp,
 	isBot,
+	percentOf,
+	perMinute,
 	playerKey,
 	teamName,
 	teamSide,
@@ -149,6 +151,16 @@ export interface MatchPlayerResult extends TrackedPlayerStats {
 	joins: number;
 	/** Times the player left before the end (team changes don't count). */
 	leaves: number;
+	/**
+	 * `true` if the player's team (the last one they were on) won the match. Not set while the match is
+	 * being played.
+	 */
+	won?: boolean;
+	/**
+	 * Seconds of play the player was in the match: the sum of their `sessions`, same measure as
+	 * `MatchStats.secondsPlayed`. Lower than the match's for players who joined late or left early.
+	 */
+	secondsPlayed: number;
 	Score: number;
 	Goals: number;
 	Shots: number;
@@ -157,6 +169,39 @@ export interface MatchPlayerResult extends TrackedPlayerStats {
 	Touches: number;
 	CarTouches: number;
 	Demos: number;
+	/** Shots that went in: `Goals` / `Shots`, 0–100. `0` without shots. */
+	shootingPercent: number;
+	/**
+	 * Goals the player scored or assisted, over the goals of their team (`Score` of the last team they were on),
+	 * 0–100. `0` when the team didn't score. Can go over 100 for a player who scored for both teams.
+	 */
+	goalParticipation: number;
+	/** `boostUsed` per minute of `secondsPlayed`. Needs the `SPECTATOR` `Boost` field, like `boostUsed`. */
+	boostPerMinute: number;
+}
+
+/** Everything about one team in one match. */
+export interface MatchTeamResult {
+	TeamNum: TeamNum;
+	/** `Game.Teams[].Name`. */
+	name: string;
+	/** Team score, own goals of the other team included. */
+	goals: number;
+	/** Shots of every player who played for the team, the ones who left included. */
+	shots: number;
+	/**
+	 * Shots that went in: goals scored by the team's players over their shots, 0–100. Own goals of the
+	 * other team don't count, since they are not shots. `0` without shots.
+	 */
+	shootingPercent: number;
+	/** `true` if the team won. Not set while the match is being played. */
+	won?: boolean;
+	/** Boost used by the team's players. Needs the `SPECTATOR` `Boost` field. */
+	boostUsed: number;
+	/** `boostUsed` per minute of the match's `secondsPlayed` (the whole team, not per player). */
+	boostPerMinute: number;
+	/** Share of possession, 0–100. */
+	possessionPercent: number;
 }
 
 /** Live stats of the current match. Times only count while the ball is in play and the match is not paused. */
@@ -187,6 +232,8 @@ export interface MatchSummary extends MatchStats {
 	 * who left before the end (`leftEarly: true`) with the stats they had when they left.
 	 */
 	playerResults: MatchPlayerResult[];
+	/** Results of each team, ordered by `TeamNum`. */
+	teamResults: MatchTeamResult[];
 	/** Highest score on the winning team. See {@link getMvp}. */
 	mvp: MatchPlayerResult | undefined;
 	endedAt: Date;
@@ -361,6 +408,16 @@ export class MatchTracker {
 		const [blue, orange] = teams;
 		const leader = blue && orange && blue.Score !== orange.Score ? (blue.Score > orange.Score ? blue : orange).TeamNum : undefined;
 		return this.#playerResults(this.#ended ? this.#winnerTeamNum : leader, this.getStats(), teams);
+	}
+
+	/**
+	 * Live results of each team in the current match, ordered by `TeamNum`: the same shape as
+	 * `MatchSummary.teamResults`. `won` is set only after `MatchEnded`.
+	 */
+	getTeamResults(): MatchTeamResult[] {
+		const teams = this.getTeams();
+		const stats = this.getStats();
+		return this.#teamResults(teams, stats, this.#playerResults(this.#ended ? this.#winnerTeamNum : undefined, stats, teams));
 	}
 
 	/** Called with the final stats when a match ends. Returns a function that removes the listener. */
@@ -655,6 +712,7 @@ export class MatchTracker {
 			overtime: game?.bOvertime ?? false,
 			scoreboard,
 			playerResults,
+			teamResults: this.#teamResults(teams, stats, playerResults),
 			mvp: playerResults.find((player) => player.mvp),
 			endedAt: new Date(),
 			endMoment: this.#timeline.at(-1)?.moment ?? this.getMoment(),
@@ -664,6 +722,28 @@ export class MatchTracker {
 			timeline: [...this.#timeline],
 		};
 		for (const listener of [...this.#matchEndListeners]) listener(summary);
+	}
+
+	#teamResults(teams: GameTeam[], stats: MatchStats, playerResults: readonly MatchPlayerResult[]): MatchTeamResult[] {
+		const winner = this.#ended ? this.#winnerTeamNum : undefined;
+		return teams.map((team) => {
+			const side = teamSide(team.TeamNum);
+			const members = playerResults.filter((player) => player.TeamNum === team.TeamNum);
+			const shots = members.reduce((sum, player) => sum + player.Shots, 0);
+			const playerGoals = members.reduce((sum, player) => sum + player.Goals, 0);
+			const boostUsed = side ? stats.boost.teams[side] : 0;
+			return {
+				TeamNum: team.TeamNum,
+				name: teamName(teams, team.TeamNum),
+				goals: team.Score,
+				shots,
+				shootingPercent: percentOf(playerGoals, shots),
+				...(winner !== undefined ? { won: team.TeamNum === winner } : {}),
+				boostUsed,
+				boostPerMinute: perMinute(boostUsed, stats.secondsPlayed),
+				possessionPercent: side ? stats.possession.percent[side] : 0,
+			};
+		});
 	}
 
 	/** Scoreboard of the last `UpdateState` plus the players who left, merged with the tracked stats. */
@@ -695,6 +775,11 @@ export class MatchTracker {
 						switchedTeam: session.switchedTeam,
 					}),
 				);
+				// An open session lasts until now (or the end of the match).
+				const secondsPlayed = sessions.reduce(
+					(sum, session) => sum + Math.max(0, (session.leftAt?.secondsPlayed ?? stats.secondsPlayed) - session.joinedAt.secondsPlayed),
+					0,
+				);
 				const result: MatchPlayerResult = {
 					key,
 					PrimaryId: player.PrimaryId,
@@ -709,6 +794,8 @@ export class MatchTracker {
 					sessions,
 					joins: sessions.filter((session, i) => i === 0 || !sessions[i - 1]!.switchedTeam).length,
 					leaves: sessions.filter((session) => session.leftAt && !session.switchedTeam).length,
+					...(this.#ended && winnerTeamNum !== undefined ? { won: player.TeamNum === winnerTeamNum } : {}),
+					secondsPlayed,
 					Score: 0,
 					Goals: 0,
 					Shots: 0,
@@ -723,8 +810,14 @@ export class MatchTracker {
 					averageSpeed: own?.averageSpeed ?? 0,
 					drivingTime: own?.drivingTime ?? 0,
 					crossbar: own ? { ...own.crossbar } : { attack: 0, defense: 0, total: 0 },
+					shootingPercent: 0,
+					goalParticipation: 0,
+					boostPerMinute: perMinute(own?.boostUsed ?? 0, secondsPlayed),
 				};
 				for (const stat of TOTAL_STATS) result[stat] = player[stat] ?? 0;
+				const teamGoals = teams.find((team) => team.TeamNum === player.TeamNum)?.Score ?? 0;
+				result.shootingPercent = percentOf(result.Goals, result.Shots);
+				result.goalParticipation = percentOf(result.Goals + result.Assists, teamGoals);
 				return result;
 			})
 			.sort((a, b) => b.Score - a.Score);

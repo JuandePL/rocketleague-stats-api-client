@@ -163,6 +163,9 @@ describe('helpers', () => {
 		const totals = getTeamTotals(players);
 		expect(totals.blue).toMatchObject({ players: 2, Score: 750, Goals: 3, Saves: 4 });
 		expect(totals.orange).toMatchObject({ players: 2, Score: 700, Goals: 3, Saves: 4 });
+		const shooting = getTeamTotals([player('Ana', 0, { Goals: 1, Shots: 4 }), player('Bob', 0, { Goals: 1, Shots: 0 })]);
+		expect(shooting.blue.shootingPercent).toBe(50);
+		expect(shooting.orange.shootingPercent).toBe(0);
 	});
 });
 
@@ -1016,6 +1019,44 @@ describe('MatchTracker', () => {
 		});
 	});
 
+	describe('rates: shooting %, goal participation, boost per minute, win', () => {
+		it('computes them for every player and team, and sets the win only after the end', () => {
+			const { tracker, match } = setup();
+			const ana = player('Ana', 0, { Goals: 2, Shots: 4, Assists: 1, Boost: 100 });
+			const cid = player('Cid', 0, { Goals: 1, Shots: 1 });
+			const bob = player('Bob', 1, { Goals: 1, Shots: 2 });
+			match.players = [ana, cid, bob];
+			match.start();
+			match.play(30);
+			ana.Boost = 70;
+			const dee = player('Dee', 1, { Goals: 0, Shots: 0 });
+			match.players = [ana, cid, bob, dee]; // joins halfway
+			match.play(30);
+
+			expect(tracker.getPlayerResults().every((p) => p.won === undefined)).toBe(true);
+			expect(tracker.getTeamResults().every((t) => t.won === undefined)).toBe(true);
+
+			const onEnd = vi.fn();
+			tracker.onMatchEnd(onEnd);
+			match.end(0, [3, 1]);
+			const summary: MatchSummary = onEnd.mock.calls[0]![0];
+			const byName = (name: string) => summary.playerResults.find((p) => p.Name === name)!;
+
+			expect(byName('Ana')).toMatchObject({ won: true, secondsPlayed: 60, shootingPercent: 50, goalParticipation: 100, boostPerMinute: 30 });
+			expect(byName('Cid').shootingPercent).toBe(100);
+			expect(byName('Cid').goalParticipation).toBeCloseTo(100 / 3);
+			expect(byName('Bob')).toMatchObject({ won: false, shootingPercent: 50, goalParticipation: 100 });
+			// Seen from the first tick she was in.
+			expect(byName('Dee')).toMatchObject({ secondsPlayed: 29, shootingPercent: 0, goalParticipation: 0, boostPerMinute: 0 });
+
+			expect(summary.teamResults).toEqual([
+				{ TeamNum: 0, name: 'Blue', goals: 3, shots: 5, shootingPercent: 60, won: true, boostUsed: 30, boostPerMinute: 30, possessionPercent: 0 },
+				{ TeamNum: 1, name: 'Orange', goals: 1, shots: 2, shootingPercent: 50, won: false, boostUsed: 0, boostPerMinute: 0, possessionPercent: 0 },
+			]);
+			expect(tracker.getTeamResults()).toEqual(summary.teamResults);
+		});
+	});
+
 	it('stores the PrimaryId of every player in the stats', () => {
 		const { tracker, match } = setup();
 		match.start();
@@ -1089,6 +1130,47 @@ describe('EsportsSeries', () => {
 		playMatch(1, [0, 1]);
 		expect(series.status).toBe('running');
 		expect(series.matches).toHaveLength(1);
+	});
+
+	it('gives win %, shooting %, goal participation and boost per minute over the series', () => {
+		const { series, match } = setup({ games: 3, format: 'play-all' });
+		const ana = player('Ana', 0, { Goals: 1, Shots: 2, Boost: 100 });
+		match.players = [ana, player('Bob', 1, { Goals: 0, Shots: 1 })];
+		match.start();
+		match.play(5);
+		ana.Boost = 50;
+		match.play(5);
+		match.end(0, [1, 0]);
+
+		match.players = [player('Ana', 0, { Goals: 1, Shots: 2, Assists: 1 }), player('Bob', 1, { Goals: 3, Shots: 3 })];
+		match.start();
+		match.play(10);
+		match.end(1, [2, 3]);
+
+		const result = series.getResult();
+		const team = (name: string) => result.teams.find((t) => t.name === name)!;
+		const who = (name: string) => result.players.find((p) => p.Name === name)!;
+		expect(team('Blue')).toMatchObject({
+			matches: 2,
+			wins: 1,
+			winPercent: 50,
+			goals: 3,
+			shots: 4,
+			shootingPercent: 50,
+			boostUsed: 50,
+			secondsPlayed: 20,
+			boostPerMinute: 150,
+		});
+		expect(team('Orange')).toMatchObject({ matches: 2, wins: 1, winPercent: 50, goals: 3, shots: 4, shootingPercent: 75 });
+		expect(who('Ana')).toMatchObject({ wins: 1, winPercent: 50, teamGoals: 3, shootingPercent: 50, goalParticipation: 100, secondsPlayed: 20, boostPerMinute: 150 });
+		expect(who('Bob')).toMatchObject({ wins: 1, winPercent: 50, teamGoals: 3, shootingPercent: 75, goalParticipation: 100 });
+
+		// The match being played counts as played, but not for the win %.
+		match.start();
+		match.play(5);
+		const live = series.getLiveResult();
+		expect(live.teams.find((t) => t.name === 'Blue')).toMatchObject({ matches: 3, winPercent: 50 });
+		expect(live.players.find((p) => p.Name === 'Ana')).toMatchObject({ matches: 3, winPercent: 50 });
 	});
 
 	it('counts overtime wins like any other win', () => {

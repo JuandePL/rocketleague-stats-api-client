@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Rates and percentages for players and teams:
+  - **Match player results:** `shootingPercent` (goals / shots), `goalParticipation` (goals + assists over the team's goals), `boostPerMinute`, `secondsPlayed` (play time the player was in) and `won` (set once the match ended).
+  - **Match team results:** new `MatchSummary.teamResults` and `tracker.getTeamResults()`, with goals, shots, `shootingPercent`, `won`, boost used, `boostPerMinute` and possession.
+  - **Series:** teams get `matches`, `winPercent`, `shots`, `shootingPercent`, `boostPerMinute` and `secondsPlayed`. Players get `wins`, `winPercent`, `secondsPlayed`, `teamGoals`, `shootingPercent`, `goalParticipation` and `boostPerMinute`. The match being played doesn't count for `winPercent`.
+  - `getTeamTotals()` includes `shootingPercent`.
+  - Helpers `percentOf()` and `perMinute()`.
+
 ## [1.2.0] - 2026-11-17
 
 ### Added
