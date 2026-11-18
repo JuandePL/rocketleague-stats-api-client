@@ -19,6 +19,18 @@ export interface TeamTotals {
 	Touches: number;
 	CarTouches: number;
 	Demos: number;
+	/** `Goals` / `Shots` of the team's players, 0–100. `0` without shots. */
+	shootingPercent: number;
+}
+
+/** `part` as a percentage (0–100) of `total`. `0` when `total` is `0` or less. */
+export function percentOf(part: number, total: number): number {
+	return total > 0 ? (part / total) * 100 : 0;
+}
+
+/** `value` per minute of `seconds`. `0` when `seconds` is `0` or less. */
+export function perMinute(value: number, seconds: number): number {
+	return seconds > 0 ? value / (seconds / 60) : 0;
 }
 
 /** Scoreboard stats summed by {@link getTeamTotals}. */
@@ -98,7 +110,18 @@ export function getMvp(players: readonly Player[], winnerTeamNum?: TeamNum): Pla
 
 /** Sums the scoreboard stats of each team. */
 export function getTeamTotals(players: readonly Player[]): { blue: TeamTotals; orange: TeamTotals } {
-	const empty = (): TeamTotals => ({ players: 0, Score: 0, Goals: 0, Shots: 0, Assists: 0, Saves: 0, Touches: 0, CarTouches: 0, Demos: 0 });
+	const empty = (): TeamTotals => ({
+		players: 0,
+		Score: 0,
+		Goals: 0,
+		Shots: 0,
+		Assists: 0,
+		Saves: 0,
+		Touches: 0,
+		CarTouches: 0,
+		Demos: 0,
+		shootingPercent: 0,
+	});
 	const totals = { blue: empty(), orange: empty() };
 	for (const player of players) {
 		const side = teamSide(player.TeamNum);
@@ -107,6 +130,7 @@ export function getTeamTotals(players: readonly Player[]): { blue: TeamTotals; o
 		team.players++;
 		for (const stat of TOTAL_STATS) team[stat] += player[stat] ?? 0;
 	}
+	for (const team of [totals.blue, totals.orange]) team.shootingPercent = percentOf(team.Goals, team.Shots);
 	return totals;
 }
 

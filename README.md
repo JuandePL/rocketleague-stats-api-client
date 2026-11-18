@@ -203,7 +203,7 @@ tracker.getPlayerResults(); // live scoreboard + tracked stats per player
 tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possession.percent));
 ```
 
-The tracker only counts time with the ball in play, freezes while the match is paused, keeps players who leave early (with when they left), and records every join, leave and team change.
+The tracker only counts time with the ball in play, freezes while the match is paused, keeps players who leave early (with when they left), and records every join, leave and team change. Player and team results also have shooting %, goal participation, boost per minute and the win, and series results add the win %.
 
 **Full reference: [docs/match-stats.md](docs/match-stats.md)**, including how each stat is computed, the `MatchSummary`, time between moments (`timeFromPlayerLeftToMatchEnd`…) and the limitations.
 

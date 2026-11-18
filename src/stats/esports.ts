@@ -1,6 +1,6 @@
 import type { Unsubscribe } from '../client.js';
 import type { TeamNum } from '../types/common.js';
-import { teamName, teamSide, TOTAL_STATS } from './helpers.js';
+import { percentOf, perMinute, teamName, teamSide, TOTAL_STATS } from './helpers.js';
 import { MatchTracker, type CrossbarHits, type MatchSummary, type MatchTrackerOptions, type StatsEventSource } from './match.js';
 
 /** How a series ends. */
@@ -35,11 +35,24 @@ export type SeriesStatus = 'idle' | 'running' | 'finished' | 'stopped';
 /** A team's results over the series. Teams are identified by name, so they can switch sides between matches. */
 export interface SeriesTeamResult {
 	name: string;
+	/** Matches the team played, the one being played included in `getLiveResult()`. */
+	matches: number;
 	wins: number;
+	/** Wins over the finished matches the team played, 0–100. The match being played doesn't count. */
+	winPercent: number;
+	/** Team score summed over the series, own goals of the other team included. */
 	goals: number;
+	/** Shots of the team's players over the series. */
+	shots: number;
+	/** Goals scored by the team's players over their shots, 0–100 (own goals of the other team left out). */
+	shootingPercent: number;
 	/** Share of possession over the whole series, 0–100. */
 	possessionPercent: number;
 	boostUsed: number;
+	/** `boostUsed` per minute of play over the team's matches. */
+	boostPerMinute: number;
+	/** Seconds of play over the team's matches. */
+	secondsPlayed: number;
 }
 
 /** A player's totals over the series. The results of each match are in `MatchSummary.playerResults`. */
@@ -62,6 +75,14 @@ export interface SeriesPlayerResult {
 	leftEarly: number;
 	/** Matches in which the player was the MVP. */
 	mvps: number;
+	/** Finished matches the player's team won (the team they were on at the end of each match). */
+	wins: number;
+	/** Wins over the finished matches the player played, 0–100. The match being played doesn't count. */
+	winPercent: number;
+	/** Seconds of play the player was in, summed over the series (see `MatchPlayerResult.secondsPlayed`). */
+	secondsPlayed: number;
+	/** Goals of the player's team in each match they played, summed. The base of `goalParticipation`. */
+	teamGoals: number;
 	/** Times the player entered a match, summed over the series (see `MatchPlayerResult.joins`). */
 	joins: number;
 	/** Times the player left a match before its end, summed over the series. `leftEarly` counts matches instead. */
@@ -74,7 +95,13 @@ export interface SeriesPlayerResult {
 	Touches: number;
 	CarTouches: number;
 	Demos: number;
+	/** `Goals` / `Shots` over the series, 0–100. `0` without shots. */
+	shootingPercent: number;
+	/** `Goals` + `Assists` over `teamGoals`, 0–100. `0` when the player's teams didn't score. */
+	goalParticipation: number;
 	boostUsed: number;
+	/** `boostUsed` per minute of `secondsPlayed`. */
+	boostPerMinute: number;
 	/** Seconds in the air (see `TrackedPlayerStats.airTime`). */
 	airTime: number;
 	/** Seconds driving on a wall (see `TrackedPlayerStats.onWallTime`). */
@@ -105,7 +132,7 @@ export interface SeriesResult {
 }
 
 /** What the series totals need from a match. A match in progress has no `winnerTeamNum` yet. */
-type CountedMatch = Pick<MatchSummary, 'teams' | 'boost' | 'possession' | 'playerResults'> & { winnerTeamNum?: TeamNum };
+type CountedMatch = Pick<MatchSummary, 'teams' | 'boost' | 'possession' | 'playerResults' | 'secondsPlayed'> & { winnerTeamNum?: TeamNum };
 
 export type SeriesStartListener = (options: Required<SeriesOptions>) => void;
 export type SeriesMatchListener = (match: MatchSummary, series: SeriesResult) => void;
@@ -231,12 +258,37 @@ export class EsportsSeries {
 	}
 
 	#teams(matches: readonly CountedMatch[]): SeriesTeamResult[] {
-		const teams = new Map<string, { result: SeriesTeamResult; possession: number }>();
+		interface TeamEntry {
+			result: SeriesTeamResult;
+			possession: number;
+			/** Finished matches: the base of `winPercent`. */
+			decided: number;
+			/** Goals of the team's players (no own goals of the other team): the base of `shootingPercent`. */
+			playerGoals: number;
+		}
+		const teams = new Map<string, TeamEntry>();
 		let possessionTotal = 0;
 		const get = (name: string) => {
 			let entry = teams.get(name);
 			if (!entry) {
-				entry = { result: { name, wins: 0, goals: 0, possessionPercent: 0, boostUsed: 0 }, possession: 0 };
+				entry = {
+					result: {
+						name,
+						matches: 0,
+						wins: 0,
+						winPercent: 0,
+						goals: 0,
+						shots: 0,
+						shootingPercent: 0,
+						possessionPercent: 0,
+						boostUsed: 0,
+						boostPerMinute: 0,
+						secondsPlayed: 0,
+					},
+					possession: 0,
+					decided: 0,
+					playerGoals: 0,
+				};
 				teams.set(name, entry);
 			}
 			return entry;
@@ -246,8 +298,16 @@ export class EsportsSeries {
 			for (const teamNum of [0, 1]) {
 				const side = teamSide(teamNum)!;
 				const entry = get(teamName(match.teams, teamNum));
+				entry.result.matches++;
+				if (match.winnerTeamNum !== undefined) entry.decided++;
 				entry.result.goals += match.teams.find((team) => team.TeamNum === teamNum)?.Score ?? 0;
+				for (const player of match.playerResults) {
+					if (player.TeamNum !== teamNum) continue;
+					entry.result.shots += player.Shots;
+					entry.playerGoals += player.Goals;
+				}
 				entry.result.boostUsed += match.boost.teams[side];
+				entry.result.secondsPlayed += match.secondsPlayed;
 				entry.possession += match.possession.seconds[side];
 			}
 			if (match.winnerTeamNum !== undefined) get(teamName(match.teams, match.winnerTeamNum)).result.wins++;
@@ -255,15 +315,20 @@ export class EsportsSeries {
 		}
 
 		return [...teams.values()]
-			.map(({ result, possession }) => ({
+			.map(({ result, possession, decided, playerGoals }) => ({
 				...result,
-				possessionPercent: possessionTotal > 0 ? (possession / possessionTotal) * 100 : 0,
+				winPercent: percentOf(result.wins, decided),
+				shootingPercent: percentOf(playerGoals, result.shots),
+				boostPerMinute: perMinute(result.boostUsed, result.secondsPlayed),
+				possessionPercent: percentOf(possession, possessionTotal),
 			}))
 			.sort((a, b) => b.wins - a.wins || b.goals - a.goals);
 	}
 
 	#players(matches: readonly CountedMatch[]): SeriesPlayerResult[] {
 		const players = new Map<string, SeriesPlayerResult>();
+		/** Finished matches of each player: the base of `winPercent`. */
+		const decided = new Map<string, number>();
 		for (const match of matches) {
 			for (const result of match.playerResults) {
 				let total = players.get(result.key);
@@ -278,6 +343,13 @@ export class EsportsSeries {
 						matches: 0,
 						leftEarly: 0,
 						mvps: 0,
+						wins: 0,
+						winPercent: 0,
+						secondsPlayed: 0,
+						teamGoals: 0,
+						shootingPercent: 0,
+						goalParticipation: 0,
+						boostPerMinute: 0,
 						joins: 0,
 						leaves: 0,
 						Score: 0,
@@ -303,6 +375,10 @@ export class EsportsSeries {
 				total.matches++;
 				if (result.leftEarly) total.leftEarly++;
 				if (result.mvp) total.mvps++;
+				if (result.won !== undefined) decided.set(result.key, (decided.get(result.key) ?? 0) + 1);
+				if (result.won) total.wins++;
+				total.secondsPlayed += result.secondsPlayed;
+				total.teamGoals += match.teams.find((team) => team.TeamNum === result.TeamNum)?.Score ?? 0;
 				total.joins += result.joins;
 				total.leaves += result.leaves;
 				if (result.PrimaryId) total.PrimaryId = result.PrimaryId;
@@ -319,6 +395,12 @@ export class EsportsSeries {
 				total.crossbar.defense += result.crossbar.defense;
 				total.crossbar.total += result.crossbar.total;
 			}
+		}
+		for (const total of players.values()) {
+			total.winPercent = percentOf(total.wins, decided.get(total.key) ?? 0);
+			total.shootingPercent = percentOf(total.Goals, total.Shots);
+			total.goalParticipation = percentOf(total.Goals + total.Assists, total.teamGoals);
+			total.boostPerMinute = perMinute(total.boostUsed, total.secondsPlayed);
 		}
 		return [...players.values()].sort((a, b) => b.Score - a.Score);
 	}

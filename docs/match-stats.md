@@ -10,6 +10,7 @@
   - [Tracked stats](#tracked-stats)
   - [What time counts](#what-time-counts)
   - [Match summary](#match-summary)
+  - [Rates and percentages](#rates-and-percentages)
   - [Live player results](#live-player-results)
   - [Players who leave early](#players-who-leave-early)
   - [Joins, leaves and team changes](#joins-leaves-and-team-changes)
@@ -26,8 +27,10 @@ import { getMvp, getTopPlayer, getTeamTotals } from '@juande_pl/rocketleague-sta
 
 getMvp(data.Players, winnerTeamNum);  // highest score on the winning team (ties: goals, assists, saves, shots)
 getTopPlayer(data.Players, 'Saves');  // player with the most saves
-getTeamTotals(data.Players);          // { blue: { Score, Goals, Shots, ... }, orange: { ... } }
+getTeamTotals(data.Players);          // { blue: { Score, Goals, Shots, ..., shootingPercent }, orange: { ... } }
 ```
+
+`percentOf(part, total)` and `perMinute(value, seconds)` are exported too. Both return `0` instead of dividing by zero.
 
 ## Speed units
 
@@ -71,6 +74,22 @@ Only time with the ball in play counts. Kickoff countdowns and goal replays are 
 ### Match summary
 
 When the match ends, it gives you a `MatchSummary` with the teams, the winner and the MVP. Its `playerResults` has one entry per player: `PrimaryId`, the scoreboard (`Score`, `Goals`, `Assists`, `Saves`, `Shots`, …), `team`, `mvp`, `leftEarly`, `boostUsed`, `airTime`, `onWallTime`, `averageSpeed`, `drivingTime` and `crossbar`. The raw scoreboard sent by the game is in `scoreboard`.
+
+`teamResults` has one entry per team, ordered by `TeamNum`: `name`, `goals`, `shots`, `shootingPercent`, `won`, `boostUsed`, `boostPerMinute` and `possessionPercent`. Live, use `tracker.getTeamResults()`.
+
+### Rates and percentages
+
+Percentages go from 0 to 100, and every rate is `0` when there is nothing to divide by (no shots, no goals, no play time).
+
+| Stat | Player | Team | How it is computed |
+| ---- | :----: | :--: | ------------------ |
+| `shootingPercent` | ✓ | ✓ | `Goals` / `Shots`. For a team, the goals and shots of its players: own goals of the other team are not shots, so they don't count. |
+| `goalParticipation` | ✓ | | (`Goals` + `Assists`) / goals of the player's team (its `Score`). Can go over 100 for a player who scored for both teams after switching. |
+| `boostPerMinute` | ✓ | ✓ | `boostUsed` per minute of play. For a player, their own `secondsPlayed` (the time they were in the match). For a team, the whole team's boost over the match's play time. Only while spectating, like `boostUsed`. |
+| `won` | ✓ | ✓ | `true` if the team (for a player, the last team they were on) won. Not set until `MatchEnded`. The win percentage is in the [series results](esports-series.md#what-the-results-include). |
+| `secondsPlayed` | ✓ | | Play time the player was in the match, summed over their `sessions`. Counted from the first `UpdateState` they were in. |
+
+Players who switched team count fully for the last team they were on.
 
 ### Live player results
 
