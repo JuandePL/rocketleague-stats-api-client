@@ -246,6 +246,7 @@ export interface MatchSummary extends MatchStats {
 }
 
 export type MatchEndListener = (summary: MatchSummary) => void;
+export type MatchStartListener = () => void;
 
 /** Ignore clock jumps larger than this (seeking a replay, joining mid-match). */
 const MAX_CLOCK_STEP = 5;
@@ -320,6 +321,7 @@ function isInAir(player: Player): boolean {
  */
 export class MatchTracker {
 	readonly #matchEndListeners = new Set<MatchEndListener>();
+	readonly #matchStartListeners = new Set<MatchStartListener>();
 	#detach: Unsubscribe | undefined;
 
 	// Round state
@@ -328,6 +330,10 @@ export class MatchTracker {
 	#sawRoundStart = false;
 	#paused = false;
 	#ended = false;
+	/** `true` once `MatchInitialized` (or a `RoundStarted`) was seen in the current match. */
+	#started = false;
+	/** `true` after `MatchCreated`: the players are in the lobby until `MatchInitialized`. */
+	#inLobby = false;
 	/** `false` after a counted `CrossbarHit` until the ball is touched again: one hit per touch. */
 	#crossbarArmed = true;
 	#winnerTeamNum: TeamNum | undefined;
@@ -378,12 +384,27 @@ export class MatchTracker {
 		return this.#paused;
 	}
 
+	/**
+	 * `true` from `MatchInitialized` until `MatchEnded`: the match is being played. Unlike {@link matchInProgress},
+	 * it is `false` in the lobby after `MatchCreated`, before the match starts.
+	 *
+	 * If the tracker joins mid-match (no `MatchCreated` or `MatchInitialized` seen), it is `true` from the first
+	 * `UpdateState`. If only `MatchInitialized` was missed, it is `true` from the first `RoundStarted`.
+	 */
+	get matchStarted(): boolean {
+		return this.#started && !this.#ended;
+	}
+
 	/** `true` after `MatchEnded`, until the next match starts. */
 	get matchEnded(): boolean {
 		return this.#ended;
 	}
 
-	/** `true` while a match is being tracked: an `UpdateState` was received and `MatchEnded` wasn't. */
+	/**
+	 * `true` while a match is being tracked: an `UpdateState` was received and `MatchEnded` wasn't.
+	 * It is already `true` in the lobby after `MatchCreated`, before the match starts: to know if the match
+	 * is being played, use {@link matchStarted}.
+	 */
 	get matchInProgress(): boolean {
 		return this.#lastGame !== undefined && !this.#ended;
 	}
@@ -426,12 +447,30 @@ export class MatchTracker {
 		return () => this.#matchEndListeners.delete(listener);
 	}
 
+	/**
+	 * Called when a match starts: on `MatchInitialized`, not while the players are still in the lobby after
+	 * `MatchCreated`. When joining mid-match, on the first `UpdateState` (see {@link matchStarted}).
+	 * Returns a function that removes the listener.
+	 */
+	onMatchStart(listener: MatchStartListener): Unsubscribe {
+		this.#matchStartListeners.add(listener);
+		return () => this.#matchStartListeners.delete(listener);
+	}
+
+	#begin(): void {
+		if (this.#started || this.#ended) return;
+		this.#started = true;
+		for (const listener of [...this.#matchStartListeners]) listener();
+	}
+
 	/** Clears every stat, as if a new match had started. */
 	reset(): void {
 		this.#roundActive = false;
 		this.#sawRoundStart = false;
 		this.#paused = false;
 		this.#ended = false;
+		this.#started = false;
+		this.#inLobby = false;
 		this.#crossbarArmed = true;
 		this.#winnerTeamNum = undefined;
 		this.#lastClock = undefined;
@@ -477,10 +516,15 @@ export class MatchTracker {
 
 		switch (event.Event) {
 			case 'MatchCreated':
+				this.reset();
+				this.#inLobby = true;
+				break;
 			case 'MatchInitialized':
 				this.reset();
+				this.#begin();
 				break;
 			case 'RoundStarted':
+				this.#begin(); // in case MatchInitialized was missed
 				this.#roundActive = true;
 				this.#sawRoundStart = true;
 				this.#crossbarArmed = true;
@@ -574,6 +618,8 @@ export class MatchTracker {
 	}
 
 	#tick(game: Game, players: Player[], matchGuid: string | undefined): void {
+		// Without MatchCreated first, this is not a lobby: the tracker joined a match already being played.
+		if (!this.#inLobby) this.#begin();
 		this.#lastGame = game;
 		this.#lastPlayers = players;
 		this.#matchGuid = matchGuid ?? this.#matchGuid;
