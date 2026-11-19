@@ -15,6 +15,18 @@ export interface SeriesOptions {
 	games: number;
 	/** @default 'best-of' */
 	format?: SeriesFormat;
+	/**
+	 * Timeouts each team can call in the series, between the end of a match and the start of the next one.
+	 * See {@link EsportsSeries.callTimeout}. `0` turns timeouts off.
+	 * @default 0
+	 */
+	timeouts?: number;
+	/**
+	 * How long a timeout lasts, in seconds. `0` means it lasts until {@link EsportsSeries.endTimeout} is
+	 * called or the next match starts. A timeout always ends when the next match starts (`MatchInitialized`).
+	 * @default 0
+	 */
+	timeoutSeconds?: number;
 }
 
 export interface EsportsSeriesOptions extends Partial<SeriesOptions>, MatchTrackerOptions {
@@ -31,6 +43,55 @@ export interface EsportsSeriesOptions extends Partial<SeriesOptions>, MatchTrack
 
 /** `idle`: never started. `running`: recording matches. `finished`: reached its end. `stopped`: ended early with {@link EsportsSeries.stop}. */
 export type SeriesStatus = 'idle' | 'running' | 'finished' | 'stopped';
+
+/**
+ * Why a timeout ended. `ended`: {@link EsportsSeries.endTimeout}. `expired`: its `timeoutSeconds` ran out.
+ * `match-started`: the next match started. `cancelled`: the series was started again, stopped or disposed.
+ */
+export type SeriesTimeoutEndReason = 'ended' | 'expired' | 'match-started' | 'cancelled';
+
+/** A timeout called by a team between two matches. */
+export interface SeriesTimeout {
+	/** Name of the team that called it. */
+	team: string;
+	/** Matches of the series finished when it was called: `1` means between the first and the second match. */
+	afterMatch: number;
+	startedAt: Date;
+	/** When it runs out, with `timeoutSeconds`. `undefined` without a time limit. */
+	endsAt: Date | undefined;
+	/** `undefined` while it lasts. */
+	endedAt: Date | undefined;
+	/** `undefined` while it lasts. */
+	endReason: SeriesTimeoutEndReason | undefined;
+}
+
+/** Why {@link EsportsSeries.callTimeout} refused a timeout. */
+export type SeriesTimeoutRefusal =
+	/** The series has `timeouts: 0`. */
+	| 'disabled'
+	/** The series is not running (idle, finished or stopped). */
+	| 'not-running'
+	/** No match of the series has finished yet: timeouts go between two matches. */
+	| 'no-match-played'
+	/** A match is being played. */
+	| 'match-in-progress'
+	/** The team didn't play in the series. */
+	| 'unknown-team'
+	/** The team used all its timeouts. */
+	| 'no-timeouts-left'
+	/** Another timeout is running. */
+	| 'timeout-active';
+
+/** Thrown by {@link EsportsSeries.callTimeout} when the timeout can't be called. `reason` says why. */
+export class SeriesTimeoutError extends Error {
+	override readonly name = 'SeriesTimeoutError';
+	constructor(
+		readonly reason: SeriesTimeoutRefusal,
+		readonly team: string,
+	) {
+		super(`Team "${team}" can't call a timeout: ${reason}.`);
+	}
+}
 
 /** A team's results over the series. Teams are identified by name, so they can switch sides between matches. */
 export interface SeriesTeamResult {
@@ -53,6 +114,10 @@ export interface SeriesTeamResult {
 	boostPerMinute: number;
 	/** Seconds of play over the team's matches. */
 	secondsPlayed: number;
+	/** Timeouts the team called in the series. */
+	timeoutsUsed: number;
+	/** Timeouts the team can still call (the `timeouts` option minus `timeoutsUsed`). */
+	timeoutsLeft: number;
 }
 
 /** A player's totals over the series. The results of each match are in `MatchSummary.playerResults`. */
@@ -129,6 +194,10 @@ export interface SeriesResult {
 	players: SeriesPlayerResult[];
 	/** Highest total score on the winning team (or overall if there is no winner yet). */
 	mvp: SeriesPlayerResult | undefined;
+	/** Every timeout called in the series, in order, the running one included. */
+	timeouts: SeriesTimeout[];
+	/** The timeout running right now, if any. */
+	activeTimeout: SeriesTimeout | undefined;
 }
 
 /** What the series totals need from a match. A match in progress has no `winnerTeamNum` yet. */
@@ -137,12 +206,21 @@ type CountedMatch = Pick<MatchSummary, 'teams' | 'boost' | 'possession' | 'playe
 export type SeriesStartListener = (options: Required<SeriesOptions>) => void;
 export type SeriesMatchListener = (match: MatchSummary, series: SeriesResult) => void;
 export type SeriesEndListener = (series: SeriesResult) => void;
+export type SeriesTimeoutListener = (timeout: SeriesTimeout, series: SeriesResult) => void;
 
 function normalizeOptions(options: Partial<SeriesOptions>): Required<SeriesOptions> {
 	const games = options.games ?? 5;
 	if (!Number.isInteger(games) || games < 1) throw new RangeError(`games must be a positive integer, got ${games}.`);
-	return { games, format: options.format ?? 'best-of' };
+	const timeouts = options.timeouts ?? 0;
+	if (!Number.isInteger(timeouts) || timeouts < 0) throw new RangeError(`timeouts must be a non-negative integer, got ${timeouts}.`);
+	const timeoutSeconds = options.timeoutSeconds ?? 0;
+	if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0) {
+		throw new RangeError(`timeoutSeconds must be a non-negative number, got ${timeoutSeconds}.`);
+	}
+	return { games, format: options.format ?? 'best-of', timeouts, timeoutSeconds };
 }
+
+const copyTimeout = (timeout: SeriesTimeout): SeriesTimeout => ({ ...timeout });
 
 /**
  * Esports mode: records a series of matches in memory and gives you the results.
@@ -155,6 +233,8 @@ function normalizeOptions(options: Partial<SeriesOptions>): Required<SeriesOptio
  *
  * Only matches that end (`MatchEnded`) while the series is running are recorded.
  * Every {@link start} or {@link restart} clears the stored matches.
+ *
+ * With the `timeouts` option, each team can call timeouts between matches with {@link callTimeout}.
  */
 export class EsportsSeries {
 	/** Live stats of the match being played. */
@@ -169,13 +249,20 @@ export class EsportsSeries {
 	readonly #startListeners = new Set<SeriesStartListener>();
 	readonly #matchListeners = new Set<SeriesMatchListener>();
 	readonly #endListeners = new Set<SeriesEndListener>();
+	readonly #timeoutStartListeners = new Set<SeriesTimeoutListener>();
+	readonly #timeoutEndListeners = new Set<SeriesTimeoutListener>();
+	#timeouts: SeriesTimeout[] = [];
+	#activeTimeout: SeriesTimeout | undefined;
+	#timeoutTimer: ReturnType<typeof setTimeout> | undefined;
 	readonly #unsubscribe: Unsubscribe;
+	readonly #unsubscribeStart: Unsubscribe;
 
 	constructor(source?: StatsEventSource, options: EsportsSeriesOptions = {}) {
 		this.#options = normalizeOptions(options);
 		this.#autoStart = options.autoStart ?? true;
 		this.tracker = new MatchTracker(source, { identifyPlayer: options.identifyPlayer });
 		this.#unsubscribe = this.tracker.onMatchEnd((summary) => this.#record(summary));
+		this.#unsubscribeStart = this.tracker.onMatchStart(() => this.#finishTimeout('match-started'));
 		if (this.#autoStart) this.start(this.#options);
 	}
 
@@ -195,8 +282,11 @@ export class EsportsSeries {
 
 	/** Starts a new series. Clears any stored matches, even if a series was running. */
 	start(options: SeriesOptions = this.#options): void {
-		this.#options = normalizeOptions(options);
+		const normalized = normalizeOptions(options);
+		this.#finishTimeout('cancelled');
+		this.#options = normalized;
 		this.#matches = [];
+		this.#timeouts = [];
 		this.#status = 'running';
 		this.#stoppedByUser = false;
 		for (const listener of [...this.#startListeners]) listener({ ...this.#options });
@@ -209,14 +299,139 @@ export class EsportsSeries {
 
 	/** Stops recording, including the automatic restart. The matches played so far stay in {@link getResult}. */
 	stop(): void {
+		this.#finishTimeout('cancelled');
 		if (this.#status === 'running') this.#status = 'stopped';
 		this.#stoppedByUser = true;
 	}
 
-	/** Stops listening to the client. */
+	/** Stops listening to the client. A running timeout is cancelled. */
 	dispose(): void {
+		this.#finishTimeout('cancelled');
 		this.#unsubscribe();
+		this.#unsubscribeStart();
 		this.tracker.detach();
+	}
+
+	/** The timeout running right now, if any. */
+	get activeTimeout(): SeriesTimeout | undefined {
+		return this.#activeTimeout && copyTimeout(this.#activeTimeout);
+	}
+
+	/**
+	 * Name of a team given by name or by `TeamNum`. A `TeamNum` is the side the team played on in the last
+	 * finished match of the series (teams can switch sides between matches).
+	 */
+	teamOf(team: string | TeamNum): string {
+		if (typeof team === 'string') return team;
+		return teamName(this.#matches.at(-1)?.teams ?? [], team);
+	}
+
+	/** Timeouts `team` (name or `TeamNum`, see {@link teamOf}) can still call in this series. `0` for a team that didn't play in it. */
+	timeoutsLeft(teamOrNum: string | TeamNum): number {
+		const team = this.teamOf(teamOrNum);
+		if (!this.#teamNames().has(team)) return 0;
+		return Math.max(0, this.#options.timeouts - this.#timeoutsUsed(team));
+	}
+
+	/**
+	 * `true` if `team` (name or `TeamNum`, see {@link teamOf}) still has timeouts to call in this series.
+	 * It doesn't check whether one can be called right now (for that, see {@link canCallTimeout}).
+	 */
+	hasTimeoutsLeft(team: string | TeamNum): boolean {
+		return this.timeoutsLeft(team) > 0;
+	}
+
+	/** Why `team` (name or `TeamNum`, see {@link teamOf}) can't call a timeout right now, or `undefined` if it can. */
+	timeoutRefusal(teamOrNum: string | TeamNum): SeriesTimeoutRefusal | undefined {
+		const team = this.teamOf(teamOrNum);
+		if (this.#options.timeouts === 0) return 'disabled';
+		if (this.#status !== 'running') return 'not-running';
+		if (this.#matches.length === 0) return 'no-match-played';
+		if (this.tracker.matchStarted) return 'match-in-progress';
+		if (!this.#teamNames().has(team)) return 'unknown-team';
+		if (this.timeoutsLeft(team) === 0) return 'no-timeouts-left';
+		if (this.#activeTimeout) return 'timeout-active';
+		return undefined;
+	}
+
+	/** `true` if `team` can call a timeout right now. See {@link timeoutRefusal} for why not. */
+	canCallTimeout(team: string | TeamNum): boolean {
+		return this.timeoutRefusal(team) === undefined;
+	}
+
+	/**
+	 * `team` calls a timeout: its name (as in `SeriesTeamResult.name`) or its `TeamNum` in the last finished match
+	 * (see {@link teamOf}). Only between the end of a match of the series and the start of the next one, while the
+	 * team has timeouts left and no other timeout is running.
+	 *
+	 * The timeout ends with {@link endTimeout}, when `timeoutSeconds` run out, or when the next match starts.
+	 * @throws {SeriesTimeoutError} when the timeout can't be called; its `reason` says why.
+	 */
+	callTimeout(teamOrNum: string | TeamNum): SeriesTimeout {
+		const team = this.teamOf(teamOrNum);
+		const refusal = this.timeoutRefusal(team);
+		if (refusal) throw new SeriesTimeoutError(refusal, team);
+		const startedAt = new Date();
+		const { timeoutSeconds } = this.#options;
+		const timeout: SeriesTimeout = {
+			team,
+			afterMatch: this.#matches.length,
+			startedAt,
+			endsAt: timeoutSeconds > 0 ? new Date(startedAt.getTime() + timeoutSeconds * 1000) : undefined,
+			endedAt: undefined,
+			endReason: undefined,
+		};
+		this.#timeouts.push(timeout);
+		this.#activeTimeout = timeout;
+		if (timeoutSeconds > 0) {
+			this.#timeoutTimer = setTimeout(() => this.#finishTimeout('expired'), timeoutSeconds * 1000);
+			// Don't keep a Node process alive only for the timer.
+			(this.#timeoutTimer as { unref?: () => void }).unref?.();
+		}
+		const result = this.getResult();
+		for (const listener of [...this.#timeoutStartListeners]) listener(copyTimeout(timeout), result);
+		return copyTimeout(timeout);
+	}
+
+	/** Ends the running timeout early (for example when the team is ready). Returns it, or `undefined` if none was running. */
+	endTimeout(): SeriesTimeout | undefined {
+		return this.#finishTimeout('ended');
+	}
+
+	/** Called when a team calls a timeout. Returns a function that removes the listener. */
+	onTimeoutStart(listener: SeriesTimeoutListener): Unsubscribe {
+		this.#timeoutStartListeners.add(listener);
+		return () => this.#timeoutStartListeners.delete(listener);
+	}
+
+	/** Called when a timeout ends, whatever the reason (see `endReason`). Returns a function that removes the listener. */
+	onTimeoutEnd(listener: SeriesTimeoutListener): Unsubscribe {
+		this.#timeoutEndListeners.add(listener);
+		return () => this.#timeoutEndListeners.delete(listener);
+	}
+
+	#finishTimeout(reason: SeriesTimeoutEndReason): SeriesTimeout | undefined {
+		const timeout = this.#activeTimeout;
+		if (!timeout) return undefined;
+		clearTimeout(this.#timeoutTimer);
+		this.#timeoutTimer = undefined;
+		this.#activeTimeout = undefined;
+		timeout.endedAt = new Date();
+		timeout.endReason = reason;
+		const result = this.getResult();
+		for (const listener of [...this.#timeoutEndListeners]) listener(copyTimeout(timeout), result);
+		return copyTimeout(timeout);
+	}
+
+	/** Teams that played a finished match of the series. */
+	#teamNames(): Set<string> {
+		const names = new Set<string>();
+		for (const match of this.#matches) for (const teamNum of [0, 1]) names.add(teamName(match.teams, teamNum));
+		return names;
+	}
+
+	#timeoutsUsed(team: string, timeouts: readonly SeriesTimeout[] = this.#timeouts): number {
+		return timeouts.filter((timeout) => timeout.team === team).length;
 	}
 
 	/** Called every time a series starts, including automatic restarts. Returns a function that removes the listener. */
@@ -257,7 +472,7 @@ export class EsportsSeries {
 		return this.#teams(this.#matches).some((team) => team.wins >= needed);
 	}
 
-	#teams(matches: readonly CountedMatch[]): SeriesTeamResult[] {
+	#teams(matches: readonly CountedMatch[], timeouts: readonly SeriesTimeout[] = this.#timeouts): SeriesTeamResult[] {
 		interface TeamEntry {
 			result: SeriesTeamResult;
 			possession: number;
@@ -284,6 +499,8 @@ export class EsportsSeries {
 						boostUsed: 0,
 						boostPerMinute: 0,
 						secondsPlayed: 0,
+						timeoutsUsed: 0,
+						timeoutsLeft: 0,
 					},
 					possession: 0,
 					decided: 0,
@@ -321,6 +538,8 @@ export class EsportsSeries {
 				shootingPercent: percentOf(playerGoals, result.shots),
 				boostPerMinute: perMinute(result.boostUsed, result.secondsPlayed),
 				possessionPercent: percentOf(possession, possessionTotal),
+				timeoutsUsed: this.#timeoutsUsed(result.name, timeouts),
+				timeoutsLeft: Math.max(0, this.#options.timeouts - this.#timeoutsUsed(result.name, timeouts)),
 			}))
 			.sort((a, b) => b.wins - a.wins || b.goals - a.goals);
 	}
@@ -425,12 +644,18 @@ export class EsportsSeries {
 		if (!this.tracker.matchInProgress) return this.getResult();
 		const current: CountedMatch = { ...this.tracker.getStats(), teams: this.tracker.getTeams(), playerResults: this.tracker.getPlayerResults() };
 		if (this.#status === 'running') return this.#result(this.#matches, [...this.#matches, current]);
-		if (this.#status === 'finished' && this.#autoStart && !this.#stoppedByUser) return this.#result([], [current], 'running');
+		if (this.#status === 'finished' && this.#autoStart && !this.#stoppedByUser) return this.#result([], [current], 'running', []);
 		return this.getResult();
 	}
 
-	#result(matches: MatchSummary[], counted: readonly CountedMatch[] = matches, status: SeriesStatus = this.#status): SeriesResult {
-		const teams = this.#teams(counted);
+	#result(
+		matches: MatchSummary[],
+		counted: readonly CountedMatch[] = matches,
+		status: SeriesStatus = this.#status,
+		timeouts: readonly SeriesTimeout[] = this.#timeouts,
+	): SeriesResult {
+		const teams = this.#teams(counted, timeouts);
+		const active = this.#activeTimeout && timeouts.includes(this.#activeTimeout) ? this.#activeTimeout : undefined;
 		const players = this.#players(counted);
 		const over = status === 'finished' || status === 'stopped';
 		const [first, second] = teams;
@@ -445,6 +670,8 @@ export class EsportsSeries {
 			winner,
 			players,
 			mvp,
+			timeouts: timeouts.map(copyTimeout),
+			activeTimeout: active && copyTimeout(active),
 		};
 	}
 }

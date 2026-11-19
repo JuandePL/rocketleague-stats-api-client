@@ -11,6 +11,7 @@ Records series of matches in memory and gives you the results. By default it rec
 - [How teams and players are identified](#how-teams-and-players-are-identified)
 - [What the results include](#what-the-results-include)
 - [Which matches count](#which-matches-count)
+- [Timeouts](#timeouts)
 
 ## Usage
 
@@ -40,13 +41,14 @@ See also [examples/esports.ts](../examples/esports.ts).
 
 | Method / property      | Description                                                                                   |
 | ---------------------- | --------------------------------------------------------------------------------------------- |
-| `new EsportsSeries(client, { games, format, autoStart })` | `games` defaults to `5`, `format` to `'best-of'`, `autoStart` to `true`. |
-| `start({ games, format })` | Starts a series. Clears any stored matches. `format`: `'best-of'` (default) or `'play-all'`. |
+| `new EsportsSeries(client, { games, format, autoStart, timeouts, timeoutSeconds })` | `games` defaults to `5`, `format` to `'best-of'`, `autoStart` to `true`, `timeouts` and `timeoutSeconds` to `0`. |
+| `start({ games, format, timeouts, timeoutSeconds })` | Starts a series. Clears any stored matches. `format`: `'best-of'` (default) or `'play-all'`. |
 | `restart()`            | Starts again with the same options. Clears the stored matches.                                |
 | `stop()`               | Stops recording, and the automatic restart until the next `start()` or `restart()`. The matches played so far stay in `getResult()`. |
-| `getResult()`          | `{ status, finished, matches, teams, winner, players, mvp }`, with the finished matches.      |
+| `getResult()`          | `{ status, finished, matches, teams, winner, players, mvp, timeouts, activeTimeout }`, with the finished matches.      |
 | `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. After a series finished with `autoStart`, it already shows the new series during its first match. Cheap enough for every `UpdateState`. |
 | `status`               | `'idle'`, `'running'`, `'finished'` or `'stopped'`.                                           |
+| `callTimeout(team)` / `endTimeout()` | Timeouts between matches. See [Timeouts](#timeouts). |
 | `onSeriesStart` / `onMatchEnd` / `onSeriesEnd` | Listeners. `onSeriesStart` also fires on automatic restarts. Each returns an unsubscribe function. |
 | `dispose()`            | Stops listening to the client.                                                                 |
 
@@ -73,3 +75,35 @@ See also [examples/esports.ts](../examples/esports.ts).
 
 - Only matches that end (`MatchEnded`) while the series is running are recorded.
 - **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match ends. That match then becomes the first of the new series.
+
+## Timeouts
+
+With the `timeouts` option, each team can call that many timeouts in the series. A timeout goes **between the end of a match and the start of the next one**. They are off by default (`timeouts: 0`).
+
+```ts
+const series = new EsportsSeries(client, { games: 5, timeouts: 1, timeoutSeconds: 300 }); // one 5-minute timeout per team
+
+series.onTimeoutStart((timeout) => console.log(`Timeout for ${timeout.team} until ${timeout.endsAt?.toLocaleTimeString()}`));
+series.onTimeoutEnd((timeout) => console.log(`Timeout of ${timeout.team} over (${timeout.endReason})`));
+
+if (series.canCallTimeout('Blue')) series.callTimeout('Blue');
+series.callTimeout(1);       // also by TeamNum: the team that played orange in the last match
+series.timeoutsLeft('Blue'); // 0
+series.endTimeout();         // the team is ready: ends the timeout early
+```
+
+| Method / property         | Description                                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------- |
+| `callTimeout(team)`       | `team` is the team name, as in `teams[].name`, or its `TeamNum` in the last finished match. Returns the `SeriesTimeout`. Throws a `SeriesTimeoutError` (with a `reason`) when it can't be called. |
+| `canCallTimeout(team)` / `timeoutRefusal(team)` | Whether the team can call one now, and if not, why: `'disabled'`, `'not-running'`, `'no-match-played'`, `'match-in-progress'`, `'unknown-team'`, `'no-timeouts-left'` or `'timeout-active'`. |
+| `endTimeout()`            | Ends the running timeout early. Returns it, or `undefined` if none was running.         |
+| `timeoutsLeft(team)` / `hasTimeoutsLeft(team)` | Timeouts the team can still call in this series, and whether it has any left (it may still not be able to call one right now: see `canCallTimeout`). |
+| `teamOf(team)`            | The team name for a name or a `TeamNum`.                                                 |
+| `activeTimeout`           | The running timeout, if any.                                                             |
+| `onTimeoutStart` / `onTimeoutEnd` | Listeners, called with the timeout and the series result.                        |
+
+- **By `TeamNum`:** every method that takes a team also takes a `TeamNum` (`0` blue, `1` orange). It means the side the team played on in the **last finished match**, since teams can switch sides between matches. The timeout and the results always use the team name.
+- **When it can be called:** the series is running, at least one of its matches finished, no match is being played (the lobby of the next match is fine: a match starts with `MatchInitialized`), the team played in the series and has timeouts left, and no other timeout is running.
+- **How it ends** (`endReason`): `'ended'` with `endTimeout()`, `'expired'` when `timeoutSeconds` run out, `'match-started'` when the next match starts with `MatchInitialized` (always, even with time left), or `'cancelled'` when the series is started again, stopped or disposed. With `timeoutSeconds: 0` there is no time limit.
+- **In the results:** `result.timeouts` lists every timeout of the series (`team`, `afterMatch`, `startedAt`, `endsAt`, `endedAt`, `endReason`), `result.activeTimeout` the running one, and each team has `timeoutsUsed` and `timeoutsLeft`. A timeout that ran out before its time still counts as used.
+- The timeout doesn't pause anything in the game: it's for your bot or overlay to show and enforce.

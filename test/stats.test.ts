@@ -12,6 +12,7 @@ import {
 	isBotPrimaryId,
 	MatchTracker,
 	playerKey,
+	SeriesTimeoutError,
 	timeBetween,
 	timeFromPlayerLeftTo,
 	timeFromPlayerLeftToMatchEnd,
@@ -1204,7 +1205,7 @@ describe('EsportsSeries', () => {
 			expect(series.autoStart).toBe(true);
 			playMatch(0, [1, 0]);
 			expect(series.matches).toHaveLength(1);
-			expect(series.getResult().options).toEqual({ games: 5, format: 'best-of' });
+			expect(series.getResult().options).toEqual({ games: 5, format: 'best-of', timeouts: 0, timeoutSeconds: 0 });
 		});
 
 		it('starts a new series by itself after one finishes, keeping the old result until then', () => {
@@ -1220,7 +1221,7 @@ describe('EsportsSeries', () => {
 			expect(series.getResult()).toMatchObject({ winner: 'Orange', finished: true });
 
 			playMatch(0, [1, 0]); // first match of the next series
-			expect(onStart).toHaveBeenCalledWith({ games: 3, format: 'best-of' });
+			expect(onStart).toHaveBeenCalledWith({ games: 3, format: 'best-of', timeouts: 0, timeoutSeconds: 0 });
 			expect(series.status).toBe('running');
 			expect(series.matches).toHaveLength(1);
 			expect(series.getResult().teams[0]).toMatchObject({ name: 'Blue', wins: 1 });
@@ -1345,7 +1346,7 @@ describe('EsportsSeries', () => {
 		series.restart();
 		expect(series.status).toBe('running');
 		expect(series.matches).toHaveLength(0);
-		expect(series.getResult().options).toEqual({ games: 7, format: 'best-of' });
+		expect(series.getResult().options).toEqual({ games: 7, format: 'best-of', timeouts: 0, timeoutSeconds: 0 });
 
 		series.start({ games: 1 });
 		playMatch(1, [0, 1]);
@@ -1431,6 +1432,149 @@ describe('EsportsSeries', () => {
 			const ana = series.getResult().players.find((p) => p.key === 'ana');
 			expect(ana).toMatchObject({ matches: 2, Score: 200, PrimaryId: 'Epic|abc|0' });
 			expect(series.tracker.keyOf({ Name: 'Ana', Shortcut: 1, TeamNum: 0, PrimaryId: 'Steam|765|0' })).toBe('ana');
+		});
+	});
+
+	describe('timeouts', () => {
+		it('lets each team call its timeouts only between matches', () => {
+			const { series, match, playMatch } = setup({ games: 5, timeouts: 1 });
+			const onStart = vi.fn();
+			const onEnd = vi.fn();
+			series.onTimeoutStart(onStart);
+			series.onTimeoutEnd(onEnd);
+
+			expect(series.timeoutRefusal('Blue')).toBe('no-match-played');
+			playMatch(0, [1, 0]);
+			match.start();
+			match.play(3);
+			expect(series.timeoutRefusal('Blue')).toBe('match-in-progress');
+			match.end(0, [1, 0]);
+
+			expect(series.timeoutRefusal('Green')).toBe('unknown-team');
+			expect(series.timeoutsLeft('Blue')).toBe(1);
+			const timeout = series.callTimeout('Blue');
+			expect(timeout).toMatchObject({ team: 'Blue', afterMatch: 2, endsAt: undefined, endReason: undefined });
+			expect(onStart).toHaveBeenCalledOnce();
+			expect(series.activeTimeout).toMatchObject({ team: 'Blue' });
+			expect(series.timeoutRefusal('Orange')).toBe('timeout-active');
+			expect(() => series.callTimeout('Orange')).toThrow(SeriesTimeoutError);
+
+			// The next match ends the timeout.
+			playMatch(1, [0, 1]);
+			expect(onEnd).toHaveBeenCalledOnce();
+			expect(onEnd.mock.calls[0]![0]).toMatchObject({ team: 'Blue', endReason: 'match-started' });
+			expect(series.activeTimeout).toBeUndefined();
+
+			let error: unknown;
+			try {
+				series.callTimeout('Blue');
+			} catch (e) {
+				error = e;
+			}
+			expect(error).toBeInstanceOf(SeriesTimeoutError);
+			expect(error).toMatchObject({ reason: 'no-timeouts-left', team: 'Blue' });
+
+			expect(series.endTimeout()).toBeUndefined();
+			series.callTimeout('Orange');
+			expect(series.endTimeout()).toMatchObject({ team: 'Orange', afterMatch: 3, endReason: 'ended' });
+
+			const result = series.getResult();
+			expect(result.timeouts.map((t) => [t.team, t.endReason])).toEqual([
+				['Blue', 'match-started'],
+				['Orange', 'ended'],
+			]);
+			expect(result.teams.find((t) => t.name === 'Blue')).toMatchObject({ timeoutsUsed: 1, timeoutsLeft: 0 });
+			expect(result.teams.find((t) => t.name === 'Orange')).toMatchObject({ timeoutsUsed: 1, timeoutsLeft: 0 });
+		});
+
+		it('can be called in the lobby until the next match is initialized', () => {
+			const { series, match, playMatch } = setup({ games: 5, timeouts: 1 });
+			const onEnd = vi.fn();
+			series.onTimeoutEnd(onEnd);
+			playMatch(0, [1, 0]);
+
+			// Lobby of the next match: MatchCreated and UpdateState, but no MatchInitialized yet.
+			match.send(ev('MatchCreated'));
+			match.frozen(3);
+			expect(series.tracker.matchInProgress).toBe(true);
+			expect(series.tracker.matchStarted).toBe(false);
+			expect(series.callTimeout('Orange')).toMatchObject({ team: 'Orange', afterMatch: 1 });
+			match.frozen(3);
+			expect(onEnd).not.toHaveBeenCalled();
+
+			match.send(ev('MatchInitialized'));
+			expect(onEnd.mock.calls[0]![0]).toMatchObject({ team: 'Orange', endReason: 'match-started' });
+			expect(series.tracker.matchStarted).toBe(true);
+			expect(series.timeoutRefusal('Blue')).toBe('match-in-progress');
+		});
+
+		it('accepts the TeamNum of the last finished match instead of the name', () => {
+			const { series, match, playMatch } = setup({ games: 5, format: 'play-all', timeouts: 1 });
+			playMatch(0, [1, 0]);
+			expect(series.teamOf(1)).toBe('Orange');
+			expect(series.timeoutsLeft(1)).toBe(1);
+			expect(series.hasTimeoutsLeft(1)).toBe(true);
+			expect(series.callTimeout(1)).toMatchObject({ team: 'Orange' });
+			series.endTimeout();
+			expect(series.timeoutsLeft('Orange')).toBe(0);
+			expect(series.hasTimeoutsLeft('Orange')).toBe(false);
+			expect(series.hasTimeoutsLeft('Blue')).toBe(true);
+			expect(series.hasTimeoutsLeft('Green')).toBe(false);
+			expect(series.timeoutRefusal(1)).toBe('no-timeouts-left');
+			expect(series.timeoutRefusal(5)).toBe('unknown-team');
+
+			// The teams switch sides: TeamNum 1 is now Blue.
+			match.teams = [
+				{ ...match.teams[1]!, Name: 'Orange', TeamNum: 0 },
+				{ ...match.teams[0]!, Name: 'Blue', TeamNum: 1 },
+			];
+			playMatch(0, [1, 0]);
+			expect(series.teamOf(1)).toBe('Blue');
+			expect(series.callTimeout(1)).toMatchObject({ team: 'Blue' });
+			expect(() => series.callTimeout(0)).toThrow(SeriesTimeoutError);
+		});
+
+		it('ends a timeout when its time runs out', () => {
+			vi.useFakeTimers();
+			try {
+				const { series, playMatch } = setup({ games: 3, timeouts: 2, timeoutSeconds: 60 });
+				const onEnd = vi.fn();
+				series.onTimeoutEnd(onEnd);
+				playMatch(0, [1, 0]);
+				const timeout = series.callTimeout('Orange');
+				expect(timeout.endsAt!.getTime() - timeout.startedAt.getTime()).toBe(60_000);
+				expect(series.getResult().activeTimeout).toMatchObject({ team: 'Orange' });
+
+				vi.advanceTimersByTime(59_999);
+				expect(onEnd).not.toHaveBeenCalled();
+				vi.advanceTimersByTime(1);
+				expect(onEnd.mock.calls[0]![0]).toMatchObject({ team: 'Orange', endReason: 'expired' });
+				expect(series.timeoutsLeft('Orange')).toBe(1);
+				expect(series.canCallTimeout('Orange')).toBe(true);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('is off by default, not allowed once the series is over, and cleared by a new series', () => {
+			expect(setup().series.timeoutRefusal('Blue')).toBe('disabled');
+
+			const { series, playMatch } = setup({ games: 3, timeouts: 1 });
+			const onEnd = vi.fn();
+			series.onTimeoutEnd(onEnd);
+			playMatch(0, [1, 0]);
+			series.callTimeout('Blue');
+			series.restart();
+			expect(onEnd.mock.calls[0]![0]).toMatchObject({ endReason: 'cancelled' });
+			expect(series.getResult().timeouts).toEqual([]);
+
+			playMatch(0, [1, 0]);
+			playMatch(0, [1, 0]);
+			expect(series.status).toBe('finished');
+			expect(series.timeoutRefusal('Orange')).toBe('not-running');
+
+			expect(() => new EsportsSeries(undefined, { timeouts: -1 })).toThrow(RangeError);
+			expect(() => new EsportsSeries(undefined, { timeoutSeconds: -5 })).toThrow(RangeError);
 		});
 	});
 

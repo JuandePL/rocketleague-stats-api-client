@@ -246,6 +246,7 @@ export interface MatchSummary extends MatchStats {
 }
 
 export type MatchEndListener = (summary: MatchSummary) => void;
+export type MatchStartListener = () => void;
 
 /** Ignore clock jumps larger than this (seeking a replay, joining mid-match). */
 const MAX_CLOCK_STEP = 5;
@@ -320,6 +321,7 @@ function isInAir(player: Player): boolean {
  */
 export class MatchTracker {
 	readonly #matchEndListeners = new Set<MatchEndListener>();
+	readonly #matchStartListeners = new Set<MatchStartListener>();
 	#detach: Unsubscribe | undefined;
 
 	// Round state
@@ -328,6 +330,8 @@ export class MatchTracker {
 	#sawRoundStart = false;
 	#paused = false;
 	#ended = false;
+	/** `true` once `MatchInitialized` (or a `RoundStarted`) was seen in the current match. */
+	#started = false;
 	/** `false` after a counted `CrossbarHit` until the ball is touched again: one hit per touch. */
 	#crossbarArmed = true;
 	#winnerTeamNum: TeamNum | undefined;
@@ -378,6 +382,14 @@ export class MatchTracker {
 		return this.#paused;
 	}
 
+	/**
+	 * `true` from `MatchInitialized` (or the first `RoundStarted`) until `MatchEnded`: the match is being played.
+	 * Unlike {@link matchInProgress}, it is `false` in the lobby after `MatchCreated`, before the match starts.
+	 */
+	get matchStarted(): boolean {
+		return this.#started && !this.#ended;
+	}
+
 	/** `true` after `MatchEnded`, until the next match starts. */
 	get matchEnded(): boolean {
 		return this.#ended;
@@ -426,12 +438,29 @@ export class MatchTracker {
 		return () => this.#matchEndListeners.delete(listener);
 	}
 
+	/**
+	 * Called when a match starts: on `MatchInitialized` (or on its first `RoundStarted` if `MatchInitialized`
+	 * was missed), not while the players are still in the lobby after `MatchCreated`.
+	 * Returns a function that removes the listener.
+	 */
+	onMatchStart(listener: MatchStartListener): Unsubscribe {
+		this.#matchStartListeners.add(listener);
+		return () => this.#matchStartListeners.delete(listener);
+	}
+
+	#begin(): void {
+		if (this.#started || this.#ended) return;
+		this.#started = true;
+		for (const listener of [...this.#matchStartListeners]) listener();
+	}
+
 	/** Clears every stat, as if a new match had started. */
 	reset(): void {
 		this.#roundActive = false;
 		this.#sawRoundStart = false;
 		this.#paused = false;
 		this.#ended = false;
+		this.#started = false;
 		this.#crossbarArmed = true;
 		this.#winnerTeamNum = undefined;
 		this.#lastClock = undefined;
@@ -477,10 +506,14 @@ export class MatchTracker {
 
 		switch (event.Event) {
 			case 'MatchCreated':
-			case 'MatchInitialized':
 				this.reset();
 				break;
+			case 'MatchInitialized':
+				this.reset();
+				this.#begin();
+				break;
 			case 'RoundStarted':
+				this.#begin(); // in case MatchInitialized was missed
 				this.#roundActive = true;
 				this.#sawRoundStart = true;
 				this.#crossbarArmed = true;
