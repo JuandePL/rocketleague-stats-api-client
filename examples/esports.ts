@@ -18,6 +18,7 @@
  *   l         show the live series totals, including the match being played.
  *   t <team>  the team calls a timeout, by name ("t Orange") or by TeamNum in the last match ("t 1").
  *             Between matches, the lobby included. It ends when its time runs out or the next match starts (MatchInitialized).
+ *             A number is always read as a TeamNum, even if a team is named "123".
  *   te        end the running timeout (the team is ready).
  *
  * Requires Rocket League running with the Stats API enabled (see README).
@@ -181,7 +182,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 		}
 		case 'l': {
 			const live = series.getLiveResult();
-			const playing = series.tracker.matchInProgress ? ', match in progress included' : '';
+			const playing = series.tracker.matchStarted ? ', match in progress included' : '';
 			console.log(`Live: ${live.matches.length} games finished${playing}. ${live.teams.map((t) => `${t.name} ${t.wins}`).join(' - ')}`);
 			for (const player of live.players) printPlayer(player, seriesExtra(player));
 			return;
@@ -191,7 +192,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 				console.log('Usage: t <team>, with the team name or its TeamNum in the last match (0 blue, 1 orange).');
 				return;
 			}
-			// A number is a TeamNum, anything else a team name (which can have spaces).
+			// A number is a TeamNum, anything else a team name (which can have spaces). A team named only with
+			// digits ("123") is read as a TeamNum, so call it by TeamNum instead.
 			const team = /^\d+$/.test(value) ? Number(value) : line.trim().slice(1).trim();
 			try {
 				series.callTimeout(team); // printed by onTimeoutStart

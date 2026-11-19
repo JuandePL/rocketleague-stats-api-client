@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Timeouts in `EsportsSeries`: with the `timeouts` option, each team can call timeouts between the end of a match and the start of the next one, with `callTimeout(team)`, by team name or by `TeamNum` in the last finished match. They end with `endTimeout()`, when `timeoutSeconds` run out, or when the next match starts. Also `canCallTimeout()`, `timeoutRefusal()`, `timeoutsLeft()`, `hasTimeoutsLeft()`, `teamOf()`, `activeTimeout`, the `onTimeoutStart` / `onTimeoutEnd` listeners and `SeriesTimeoutError`. Results include `timeouts`, `activeTimeout`, and `timeoutsUsed` / `timeoutsLeft` per team.
 - `MatchTracker.onMatchStart()` and `matchStarted`: the match started with `MatchInitialized` (or its first `RoundStarted`), unlike `matchInProgress`, which is already `true` in the lobby after `MatchCreated`.
 
+### Fixed
+
+- `EsportsSeries.getLiveResult()` no longer counts the lobby of the next match (after `MatchCreated`, before `MatchInitialized`) as a match being played.
+
 ## [1.2.0] - 2026-11-17
 
 ### Added

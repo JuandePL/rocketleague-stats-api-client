@@ -1498,6 +1498,8 @@ describe('EsportsSeries', () => {
 			match.frozen(3);
 			expect(series.tracker.matchInProgress).toBe(true);
 			expect(series.tracker.matchStarted).toBe(false);
+			// The lobby is not counted as a match in the live totals.
+			expect(series.getLiveResult().teams.find((t) => t.name === 'Blue')).toMatchObject({ matches: 1 });
 			expect(series.callTimeout('Orange')).toMatchObject({ team: 'Orange', afterMatch: 1 });
 			match.frozen(3);
 			expect(onEnd).not.toHaveBeenCalled();

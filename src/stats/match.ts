@@ -395,7 +395,11 @@ export class MatchTracker {
 		return this.#ended;
 	}
 
-	/** `true` while a match is being tracked: an `UpdateState` was received and `MatchEnded` wasn't. */
+	/**
+	 * `true` while a match is being tracked: an `UpdateState` was received and `MatchEnded` wasn't.
+	 * It is already `true` in the lobby after `MatchCreated`, before the match starts: to know if the match
+	 * is being played, use {@link matchStarted}.
+	 */
 	get matchInProgress(): boolean {
 		return this.#lastGame !== undefined && !this.#ended;
 	}
