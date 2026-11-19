@@ -1510,6 +1510,27 @@ describe('EsportsSeries', () => {
 			expect(series.timeoutRefusal('Blue')).toBe('match-in-progress');
 		});
 
+		it('counts a match joined midway from its first UpdateState', () => {
+			const { series, match, playMatch } = setup({ games: 5 });
+			const onStart = vi.fn();
+			series.tracker.onMatchStart(onStart);
+			// Connected mid-match: no MatchCreated, MatchInitialized nor RoundStarted, only UpdateState.
+			match.play(3);
+			expect(series.tracker.matchStarted).toBe(true);
+			expect(onStart).toHaveBeenCalledOnce();
+			expect(series.getLiveResult().teams.find((t) => t.name === 'Blue')).toMatchObject({ matches: 1 });
+			match.end(0, [1, 0]);
+			expect(series.matches).toHaveLength(1);
+
+			// The next match goes through the lobby as usual.
+			match.send(ev('MatchCreated'));
+			match.frozen(2);
+			expect(series.tracker.matchStarted).toBe(false);
+			expect(onStart).toHaveBeenCalledOnce();
+			playMatch(0, [1, 0]);
+			expect(onStart).toHaveBeenCalledTimes(2);
+		});
+
 		it('accepts the TeamNum of the last finished match instead of the name', () => {
 			const { series, match, playMatch } = setup({ games: 5, format: 'play-all', timeouts: 1 });
 			playMatch(0, [1, 0]);

@@ -332,6 +332,8 @@ export class MatchTracker {
 	#ended = false;
 	/** `true` once `MatchInitialized` (or a `RoundStarted`) was seen in the current match. */
 	#started = false;
+	/** `true` after `MatchCreated`: the players are in the lobby until `MatchInitialized`. */
+	#inLobby = false;
 	/** `false` after a counted `CrossbarHit` until the ball is touched again: one hit per touch. */
 	#crossbarArmed = true;
 	#winnerTeamNum: TeamNum | undefined;
@@ -383,8 +385,11 @@ export class MatchTracker {
 	}
 
 	/**
-	 * `true` from `MatchInitialized` (or the first `RoundStarted`) until `MatchEnded`: the match is being played.
-	 * Unlike {@link matchInProgress}, it is `false` in the lobby after `MatchCreated`, before the match starts.
+	 * `true` from `MatchInitialized` until `MatchEnded`: the match is being played. Unlike {@link matchInProgress},
+	 * it is `false` in the lobby after `MatchCreated`, before the match starts.
+	 *
+	 * If the tracker joins mid-match (no `MatchCreated` or `MatchInitialized` seen), it is `true` from the first
+	 * `UpdateState`. If only `MatchInitialized` was missed, it is `true` from the first `RoundStarted`.
 	 */
 	get matchStarted(): boolean {
 		return this.#started && !this.#ended;
@@ -443,8 +448,8 @@ export class MatchTracker {
 	}
 
 	/**
-	 * Called when a match starts: on `MatchInitialized` (or on its first `RoundStarted` if `MatchInitialized`
-	 * was missed), not while the players are still in the lobby after `MatchCreated`.
+	 * Called when a match starts: on `MatchInitialized`, not while the players are still in the lobby after
+	 * `MatchCreated`. When joining mid-match, on the first `UpdateState` (see {@link matchStarted}).
 	 * Returns a function that removes the listener.
 	 */
 	onMatchStart(listener: MatchStartListener): Unsubscribe {
@@ -465,6 +470,7 @@ export class MatchTracker {
 		this.#paused = false;
 		this.#ended = false;
 		this.#started = false;
+		this.#inLobby = false;
 		this.#crossbarArmed = true;
 		this.#winnerTeamNum = undefined;
 		this.#lastClock = undefined;
@@ -511,6 +517,7 @@ export class MatchTracker {
 		switch (event.Event) {
 			case 'MatchCreated':
 				this.reset();
+				this.#inLobby = true;
 				break;
 			case 'MatchInitialized':
 				this.reset();
@@ -611,6 +618,8 @@ export class MatchTracker {
 	}
 
 	#tick(game: Game, players: Player[], matchGuid: string | undefined): void {
+		// Without MatchCreated first, this is not a lobby: the tracker joined a match already being played.
+		if (!this.#inLobby) this.#begin();
 		this.#lastGame = game;
 		this.#lastPlayers = players;
 		this.#matchGuid = matchGuid ?? this.#matchGuid;
