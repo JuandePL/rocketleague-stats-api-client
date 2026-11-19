@@ -15,10 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Helpers `percentOf()` and `perMinute()`.
 - Timeouts in `EsportsSeries`: with the `timeouts` option, each team can call timeouts between the end of a match and the start of the next one, with `callTimeout(team)`, by team name or by `TeamNum` in the last finished match. They end with `endTimeout()`, when `timeoutSeconds` run out, or when the next match starts. Also `canCallTimeout()`, `timeoutRefusal()`, `timeoutsLeft()`, `hasTimeoutsLeft()`, `teamOf()`, `activeTimeout`, the `onTimeoutStart` / `onTimeoutEnd` listeners and `SeriesTimeoutError`. Results include `timeouts`, `activeTimeout`, and `timeoutsUsed` / `timeoutsLeft` per team.
 - `MatchTracker.onMatchStart()` and `matchStarted`: the match started with `MatchInitialized` (or from the first `UpdateState` when joining mid-match), unlike `matchInProgress`, which is already `true` in the lobby after `MatchCreated`.
+- Matches left before their end: when the lobby is destroyed (`MatchDestroyed`) without `MatchEnded`, `MatchTracker` stops the match (`matchAborted`, `matchStarted` back to `false`) and calls `onMatchAbort()` with an `AbortedMatchSummary`: the stats until then, without a winner. A match left before anything was played is dropped. `EsportsSeries` keeps them in `abortedMatches` (also in the results) and calls `onMatchAbort()`; they don't count for wins, totals or the end of the series.
 
 ### Fixed
 
 - `EsportsSeries.getLiveResult()` no longer counts the lobby of the next match (after `MatchCreated`, before `MatchInitialized`) as a match being played.
+- A match left before its end no longer stays "in progress": before, `matchStarted` stayed `true` after leaving the lobby, so the live totals kept counting it and timeouts were refused until the next lobby.
 
 ## [1.2.0] - 2026-11-17
 

@@ -55,6 +55,7 @@ const stats = tracker.getStats(); // any time during the match
 const live = tracker.getPlayerResults(); // live scoreboard + tracked stats per player
 tracker.onMatchEnd((summary) => console.log(summary.mvp?.Name, summary.possession.percent));
 tracker.onMatchStart(() => console.log('New match')); // on MatchInitialized, not in the lobby
+tracker.onMatchAbort((summary) => console.log('Left before the end', summary.secondsPlayed)); // MatchDestroyed without MatchEnded
 ```
 
 ### Tracked stats

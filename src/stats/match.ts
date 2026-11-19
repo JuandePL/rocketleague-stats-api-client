@@ -245,7 +245,19 @@ export interface MatchSummary extends MatchStats {
 	timeline: TimelineEntry[];
 }
 
+/**
+ * A match left before its end: the lobby was destroyed (`MatchDestroyed`) without `MatchEnded`, for example
+ * because the players left it. The same as a {@link MatchSummary} with the stats until then, but without a
+ * winner: `winnerTeamNum` is `undefined`, no player or team has `won`, and `mvp` is the best player overall.
+ * `endedAt` and `endMoment` are when the lobby was destroyed. `secondsPlayed` is always above `0`: a match
+ * left before any play is dropped instead.
+ */
+export interface AbortedMatchSummary extends Omit<MatchSummary, 'winnerTeamNum'> {
+	winnerTeamNum: undefined;
+}
+
 export type MatchEndListener = (summary: MatchSummary) => void;
+export type MatchAbortListener = (summary: AbortedMatchSummary) => void;
 export type MatchStartListener = () => void;
 
 /** Ignore clock jumps larger than this (seeking a replay, joining mid-match). */
@@ -322,6 +334,7 @@ function isInAir(player: Player): boolean {
 export class MatchTracker {
 	readonly #matchEndListeners = new Set<MatchEndListener>();
 	readonly #matchStartListeners = new Set<MatchStartListener>();
+	readonly #matchAbortListeners = new Set<MatchAbortListener>();
 	#detach: Unsubscribe | undefined;
 
 	// Round state
@@ -334,6 +347,8 @@ export class MatchTracker {
 	#started = false;
 	/** `true` after `MatchCreated`: the players are in the lobby until `MatchInitialized`. */
 	#inLobby = false;
+	/** `true` when the match was left before `MatchEnded` (`MatchDestroyed`). `#ended` is then `true` too. */
+	#aborted = false;
 	/** `false` after a counted `CrossbarHit` until the ball is touched again: one hit per touch. */
 	#crossbarArmed = true;
 	#winnerTeamNum: TeamNum | undefined;
@@ -397,7 +412,15 @@ export class MatchTracker {
 
 	/** `true` after `MatchEnded`, until the next match starts. */
 	get matchEnded(): boolean {
-		return this.#ended;
+		return this.#ended && !this.#aborted;
+	}
+
+	/**
+	 * `true` when the match was left before its end (`MatchDestroyed` without `MatchEnded`), until the next match
+	 * starts. The stats stop there, and {@link onMatchAbort} gets them.
+	 */
+	get matchAborted(): boolean {
+		return this.#aborted;
 	}
 
 	/**
@@ -463,6 +486,16 @@ export class MatchTracker {
 		for (const listener of [...this.#matchStartListeners]) listener();
 	}
 
+	/**
+	 * Called with the stats so far when a started match is left before its end (`MatchDestroyed` without
+	 * `MatchEnded`). See {@link AbortedMatchSummary}. Not called when nothing was played yet (left in the lobby
+	 * or during the first kickoff countdown): that match is just dropped. Returns a function that removes the listener.
+	 */
+	onMatchAbort(listener: MatchAbortListener): Unsubscribe {
+		this.#matchAbortListeners.add(listener);
+		return () => this.#matchAbortListeners.delete(listener);
+	}
+
 	/** Clears every stat, as if a new match had started. */
 	reset(): void {
 		this.#roundActive = false;
@@ -471,6 +504,7 @@ export class MatchTracker {
 		this.#ended = false;
 		this.#started = false;
 		this.#inLobby = false;
+		this.#aborted = false;
 		this.#crossbarArmed = true;
 		this.#winnerTeamNum = undefined;
 		this.#lastClock = undefined;
@@ -555,6 +589,17 @@ export class MatchTracker {
 				break;
 			case 'MatchEnded':
 				if (!this.#ended) this.#end(event.Data.WinnerTeamNum);
+				break;
+			case 'MatchDestroyed':
+				if (this.#ended) break; // the usual case: the lobby is closed after the end
+				if (this.#started && this.#secondsPlayed > 0) {
+					this.#abort();
+				} else {
+					// Nothing was played (only the lobby, or left during the first kickoff countdown): drop it.
+					// Stay "in a lobby" so later UpdateState aren't taken for a match joined midway.
+					this.reset();
+					this.#inLobby = true;
+				}
 				break;
 		}
 
@@ -740,6 +785,20 @@ export class MatchTracker {
 	}
 
 	#end(winnerTeamNum: TeamNum): void {
+		const summary = this.#finish(winnerTeamNum);
+		for (const listener of [...this.#matchEndListeners]) listener(summary);
+	}
+
+	#abort(): void {
+		this.#aborted = true;
+		const summary = this.#finish(undefined);
+		for (const listener of [...this.#matchAbortListeners]) listener(summary);
+	}
+
+	/** Stops tracking and builds the summary. A match without a winner was aborted. */
+	#finish(winnerTeamNum: TeamNum): MatchSummary;
+	#finish(winnerTeamNum: undefined): AbortedMatchSummary;
+	#finish(winnerTeamNum: TeamNum | undefined): MatchSummary | AbortedMatchSummary {
 		this.#ended = true;
 		this.#winnerTeamNum = winnerTeamNum;
 		this.#roundActive = false;
@@ -749,7 +808,7 @@ export class MatchTracker {
 		const stats = this.getStats();
 		const playerResults = this.#playerResults(winnerTeamNum, stats, teams);
 
-		const summary: MatchSummary = {
+		return {
 			...stats,
 			matchGuid: this.#matchGuid,
 			arena: game?.Arena,
@@ -767,7 +826,6 @@ export class MatchTracker {
 			),
 			timeline: [...this.#timeline],
 		};
-		for (const listener of [...this.#matchEndListeners]) listener(summary);
 	}
 
 	#teamResults(teams: GameTeam[], stats: MatchStats, playerResults: readonly MatchPlayerResult[]): MatchTeamResult[] {

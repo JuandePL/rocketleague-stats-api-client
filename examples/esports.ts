@@ -149,6 +149,12 @@ series.onTimeoutEnd((timeout) => {
 	console.log(`<<< Timeout of ${timeout.team} over after ${seconds} s: ${reasons[timeout.endReason!]}.`);
 });
 
+series.onMatchAbort((match, result) => {
+	const [blue, orange] = match.teams;
+	console.log(`\nGame left before the end at ${blue?.Name} ${blue?.Score} - ${orange?.Score} ${orange?.Name} (${Math.round(match.secondsPlayed)} s played).`);
+	console.log(`  It doesn't count: still ${result.matches.length} games played. ${result.abortedMatches.length} abandoned so far in this series.`);
+});
+
 series.onSeriesEnd((result) => {
 	console.log(`\n${result.winner ?? 'Nobody'} wins the series. Series MVP: ${result.mvp?.Name ?? '-'}`);
 	console.log('  Players (whole series):');
