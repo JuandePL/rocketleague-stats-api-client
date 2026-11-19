@@ -45,10 +45,11 @@ See also [examples/esports.ts](../examples/esports.ts).
 | `start({ games, format, timeouts, timeoutSeconds })` | Starts a series. Clears any stored matches. `format`: `'best-of'` (default) or `'play-all'`. |
 | `restart()`            | Starts again with the same options. Clears the stored matches.                                |
 | `stop()`               | Stops recording, and the automatic restart until the next `start()` or `restart()`. The matches played so far stay in `getResult()`. |
-| `getResult()`          | `{ status, finished, matches, teams, winner, players, mvp, timeouts, activeTimeout }`, with the finished matches.      |
+| `getResult()`          | `{ status, finished, matches, abortedMatches, teams, winner, players, mvp, timeouts, activeTimeout }`, with the finished matches.      |
 | `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. After a series finished with `autoStart`, it already shows the new series during its first match. Cheap enough for every `UpdateState`. |
 | `status`               | `'idle'`, `'running'`, `'finished'` or `'stopped'`.                                           |
 | `callTimeout(team)` / `endTimeout()` | Timeouts between matches. See [Timeouts](#timeouts). |
+| `abortedMatches` / `onMatchAbort` | Matches left before their end. See [Which matches count](#which-matches-count). |
 | `onSeriesStart` / `onMatchEnd` / `onSeriesEnd` | Listeners. `onSeriesStart` also fires on automatic restarts. Each returns an unsubscribe function. |
 | `dispose()`            | Stops listening to the client.                                                                 |
 
@@ -74,6 +75,7 @@ See also [examples/esports.ts](../examples/esports.ts).
 ## Which matches count
 
 - Only matches that end (`MatchEnded`) while the series is running are recorded.
+- **Matches left before their end:** if the lobby is destroyed (`MatchDestroyed`) before `MatchEnded`, for example because everyone left, the match is kept apart in `abortedMatches` with the stats until then, and `onMatchAbort` is called. It doesn't count for anything else: not for wins, team and player totals, nor the end of the series. So the match can be played again. A match left before anything was played (in the lobby, or during the first kickoff countdown after `MatchInitialized`) is just dropped.
 - **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match ends. That match then becomes the first of the new series.
 
 ## Timeouts

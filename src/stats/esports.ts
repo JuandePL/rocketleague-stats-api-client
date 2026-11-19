@@ -1,7 +1,7 @@
 import type { Unsubscribe } from '../client.js';
 import type { TeamNum } from '../types/common.js';
 import { percentOf, perMinute, teamName, teamSide, TOTAL_STATS } from './helpers.js';
-import { MatchTracker, type CrossbarHits, type MatchSummary, type MatchTrackerOptions, type StatsEventSource } from './match.js';
+import { MatchTracker, type AbortedMatchSummary, type CrossbarHits, type MatchSummary, type MatchTrackerOptions, type StatsEventSource } from './match.js';
 
 /** How a series ends. */
 export type SeriesFormat =
@@ -186,6 +186,11 @@ export interface SeriesResult {
 	finished: boolean;
 	/** Every recorded match, in order. Each one has its own `playerResults`. */
 	matches: MatchSummary[];
+	/**
+	 * Matches of the series left before their end (`MatchDestroyed` without `MatchEnded`), in order, with the
+	 * stats until then. They don't count for anything else in the result: not for wins, totals, nor the series end.
+	 */
+	abortedMatches: AbortedMatchSummary[];
 	/** Teams sorted by wins, then goals. */
 	teams: SeriesTeamResult[];
 	/** Team with the most wins once the series is over. `undefined` while running, or on a tie. */
@@ -205,6 +210,7 @@ type CountedMatch = Pick<MatchSummary, 'teams' | 'boost' | 'possession' | 'playe
 
 export type SeriesStartListener = (options: Required<SeriesOptions>) => void;
 export type SeriesMatchListener = (match: MatchSummary, series: SeriesResult) => void;
+export type SeriesMatchAbortListener = (match: AbortedMatchSummary, series: SeriesResult) => void;
 export type SeriesEndListener = (series: SeriesResult) => void;
 export type SeriesTimeoutListener = (timeout: SeriesTimeout, series: SeriesResult) => void;
 
@@ -246,8 +252,10 @@ export class EsportsSeries {
 	#stoppedByUser = false;
 	#options: Required<SeriesOptions>;
 	#matches: MatchSummary[] = [];
+	#abortedMatches: AbortedMatchSummary[] = [];
 	readonly #startListeners = new Set<SeriesStartListener>();
 	readonly #matchListeners = new Set<SeriesMatchListener>();
+	readonly #abortListeners = new Set<SeriesMatchAbortListener>();
 	readonly #endListeners = new Set<SeriesEndListener>();
 	readonly #timeoutStartListeners = new Set<SeriesTimeoutListener>();
 	readonly #timeoutEndListeners = new Set<SeriesTimeoutListener>();
@@ -256,6 +264,7 @@ export class EsportsSeries {
 	#timeoutTimer: ReturnType<typeof setTimeout> | undefined;
 	readonly #unsubscribe: Unsubscribe;
 	readonly #unsubscribeStart: Unsubscribe;
+	readonly #unsubscribeAbort: Unsubscribe;
 
 	constructor(source?: StatsEventSource, options: EsportsSeriesOptions = {}) {
 		this.#options = normalizeOptions(options);
@@ -263,6 +272,7 @@ export class EsportsSeries {
 		this.tracker = new MatchTracker(source, { identifyPlayer: options.identifyPlayer });
 		this.#unsubscribe = this.tracker.onMatchEnd((summary) => this.#record(summary));
 		this.#unsubscribeStart = this.tracker.onMatchStart(() => this.#finishTimeout('match-started'));
+		this.#unsubscribeAbort = this.tracker.onMatchAbort((summary) => this.#recordAbort(summary));
 		if (this.#autoStart) this.start(this.#options);
 	}
 
@@ -280,12 +290,18 @@ export class EsportsSeries {
 		return this.#matches;
 	}
 
+	/** Matches of the series left before their end, in order. They don't count in the results. */
+	get abortedMatches(): readonly AbortedMatchSummary[] {
+		return this.#abortedMatches;
+	}
+
 	/** Starts a new series. Clears any stored matches, even if a series was running. */
 	start(options: SeriesOptions = this.#options): void {
 		const normalized = normalizeOptions(options);
 		this.#finishTimeout('cancelled');
 		this.#options = normalized;
 		this.#matches = [];
+		this.#abortedMatches = [];
 		this.#timeouts = [];
 		this.#status = 'running';
 		this.#stoppedByUser = false;
@@ -309,6 +325,7 @@ export class EsportsSeries {
 		this.#finishTimeout('cancelled');
 		this.#unsubscribe();
 		this.#unsubscribeStart();
+		this.#unsubscribeAbort();
 		this.tracker.detach();
 	}
 
@@ -452,6 +469,24 @@ export class EsportsSeries {
 	onMatchEnd(listener: SeriesMatchListener): Unsubscribe {
 		this.#matchListeners.add(listener);
 		return () => this.#matchListeners.delete(listener);
+	}
+
+	/**
+	 * Called when a match of the running series is left before its end (`MatchDestroyed` without `MatchEnded`),
+	 * with the stats until then. It is kept in `abortedMatches` and doesn't count in the results.
+	 * Returns a function that removes the listener.
+	 */
+	onMatchAbort(listener: SeriesMatchAbortListener): Unsubscribe {
+		this.#abortListeners.add(listener);
+		return () => this.#abortListeners.delete(listener);
+	}
+
+	#recordAbort(summary: AbortedMatchSummary): void {
+		// A match left after a finished series would have been the first of the next one: nothing to keep.
+		if (this.#status !== 'running') return;
+		this.#abortedMatches.push(summary);
+		const result = this.getResult();
+		for (const listener of [...this.#abortListeners]) listener(summary, result);
 	}
 
 	/** Called once when the series reaches its end. Returns a function that removes the listener. */
@@ -654,7 +689,7 @@ export class EsportsSeries {
 		if (!this.tracker.matchStarted) return this.getResult();
 		const current: CountedMatch = { ...this.tracker.getStats(), teams: this.tracker.getTeams(), playerResults: this.tracker.getPlayerResults() };
 		if (this.#status === 'running') return this.#result(this.#matches, [...this.#matches, current]);
-		if (this.#status === 'finished' && this.#autoStart && !this.#stoppedByUser) return this.#result([], [current], 'running', []);
+		if (this.#status === 'finished' && this.#autoStart && !this.#stoppedByUser) return this.#result([], [current], 'running', true);
 		return this.getResult();
 	}
 
@@ -662,12 +697,12 @@ export class EsportsSeries {
 		matches: MatchSummary[],
 		counted: readonly CountedMatch[] = matches,
 		status: SeriesStatus = this.#status,
-		timeouts: readonly SeriesTimeout[] = this.#timeouts,
+		/** The live result of the next series during its first match: the timeouts and aborted matches stored belong to the previous one. */
+		nextSeries = false,
 	): SeriesResult {
+		const timeouts = nextSeries ? [] : this.#timeouts;
 		const teams = this.#teams(counted, timeouts);
-		// Only if it belongs to these timeouts: during the first match of the next series, getLiveResult()
-		// passes none, and the timeout of the previous series must not show up there.
-		const active = this.#activeTimeout && timeouts.includes(this.#activeTimeout) ? this.#activeTimeout : undefined;
+		const active = nextSeries ? undefined : this.#activeTimeout;
 		const players = this.#players(counted);
 		const over = status === 'finished' || status === 'stopped';
 		const [first, second] = teams;
@@ -678,6 +713,7 @@ export class EsportsSeries {
 			options: { ...this.#options },
 			finished: status === 'finished',
 			matches: [...matches],
+			abortedMatches: nextSeries ? [] : [...this.#abortedMatches],
 			teams,
 			winner,
 			players,

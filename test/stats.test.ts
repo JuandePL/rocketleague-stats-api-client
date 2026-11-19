@@ -1510,6 +1510,86 @@ describe('EsportsSeries', () => {
 			expect(series.timeoutRefusal('Blue')).toBe('match-in-progress');
 		});
 
+		it('keeps a match left before its end apart, and allows timeouts after it', () => {
+			const { series, match, playMatch } = setup({ games: 3, timeouts: 1 });
+			const onAbort = vi.fn();
+			series.onMatchAbort(onAbort);
+			playMatch(0, [2, 0]);
+
+			// Second match: played for a while, then everyone leaves the lobby.
+			match.players = [player('Ana', 0, { Score: 100, Goals: 1 }), player('Bob', 1, { Score: 300, Goals: 1 })];
+			match.send(ev('MatchCreated'));
+			match.start();
+			match.teams[0]!.Score = 1;
+			match.teams[1]!.Score = 0;
+			match.play(5);
+			expect(series.timeoutRefusal('Blue')).toBe('match-in-progress');
+			match.send(ev('MatchDestroyed'));
+
+			const { tracker } = series;
+			expect(tracker).toMatchObject({ matchStarted: false, matchAborted: true, matchEnded: false });
+			expect(onAbort).toHaveBeenCalledOnce();
+			const aborted = onAbort.mock.calls[0]![0];
+			expect(aborted).toMatchObject({ winnerTeamNum: undefined, secondsPlayed: 5, mvp: { Name: 'Bob' } });
+			expect(aborted.playerResults.every((p: { won?: boolean }) => p.won === undefined)).toBe(true);
+			expect(aborted.teamResults.every((t: { won?: boolean }) => t.won === undefined)).toBe(true);
+			expect(aborted.endMoment.timeSeconds).toBe(match.clock);
+
+			// Kept apart: nothing of it counts in the results.
+			const result = series.getResult();
+			expect(result.abortedMatches).toHaveLength(1);
+			expect(result.matches).toHaveLength(1);
+			expect(result.teams.find((t) => t.name === 'Blue')).toMatchObject({ matches: 1, wins: 1, goals: 2 });
+			expect(result.players.find((p) => p.Name === 'Ana')).toMatchObject({ matches: 1, Score: 400 });
+			expect(series.getLiveResult()).toEqual(result);
+
+			// Out of the match: timeouts can be called again.
+			expect(series.canCallTimeout('Orange')).toBe(true);
+
+			// The match is played again and counts normally. A new series clears the aborted ones.
+			playMatch(0, [1, 0]);
+			expect(series.getResult()).toMatchObject({ finished: true, winner: 'Blue' });
+			expect(series.abortedMatches).toHaveLength(1);
+			series.restart();
+			expect(series.getResult().abortedMatches).toEqual([]);
+		});
+
+		it('ignores MatchDestroyed after the end, and drops a lobby closed before the match started', () => {
+			const tracker = new MatchTracker();
+			const match = new Match((event) => tracker.handle(event));
+			const onAbort = vi.fn();
+			const onEnd = vi.fn();
+			tracker.onMatchAbort(onAbort);
+			tracker.onMatchEnd(onEnd);
+
+			match.start();
+			match.play(3);
+			match.end(0, [1, 0]);
+			match.send(ev('MatchDestroyed'));
+			expect(onEnd).toHaveBeenCalledOnce();
+			expect(tracker).toMatchObject({ matchEnded: true, matchAborted: false });
+
+			match.send(ev('MatchCreated'));
+			match.frozen(2);
+			match.send(ev('MatchDestroyed'));
+			expect(tracker).toMatchObject({ matchInProgress: false, matchStarted: false, matchAborted: false });
+			// Later UpdateState are not taken for a match joined midway.
+			match.frozen(2);
+			expect(tracker.matchStarted).toBe(false);
+
+			// Left right after MatchInitialized, during the first kickoff countdown: nothing played, dropped too.
+			match.send(ev('MatchCreated'));
+			match.send(ev('MatchInitialized'));
+			match.send(ev('CountdownBegin'));
+			match.frozen(3);
+			expect(tracker.matchStarted).toBe(true);
+			match.send(ev('MatchDestroyed'));
+			expect(tracker).toMatchObject({ matchStarted: false, matchAborted: false });
+			match.frozen(2);
+			expect(tracker.matchStarted).toBe(false);
+			expect(onAbort).not.toHaveBeenCalled();
+		});
+
 		it('counts a match joined midway from its first UpdateState', () => {
 			const { series, match, playMatch } = setup({ games: 5 });
 			const onStart = vi.fn();
