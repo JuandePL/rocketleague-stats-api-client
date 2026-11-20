@@ -1816,3 +1816,110 @@ describe('EsportsSeries: team names, manual wins and snapshots', () => {
 		series.dispose();
 	});
 });
+
+describe('EsportsSeries: options after the constructor and pause', () => {
+	function setup(options: EsportsSeriesOptions = {}) {
+		const series = new EsportsSeries(undefined, options);
+		const match = new Match((event) => series.tracker.handle(event));
+		const playMatch = (winner: 0 | 1) => {
+			match.players = [player('Ana', 0), player('Bob', 1)];
+			match.start();
+			match.play(5);
+			match.end(winner, winner === 0 ? [1, 0] : [0, 1]);
+		};
+		return { series, playMatch };
+	}
+
+	it('changes games and format without losing the matches', () => {
+		const { series, playMatch } = setup({ games: 3 });
+		const onEnd = vi.fn();
+		const onUpdate = vi.fn();
+		series.onSeriesEnd(onEnd);
+		series.onUpdate(onUpdate);
+		playMatch(0);
+		playMatch(0);
+		expect(series.status).toBe('finished');
+
+		// Best of 3 to best of 5: the series goes on.
+		expect(series.setGames(5)).toMatchObject({ games: 5, format: 'best-of' });
+		expect(series.status).toBe('running');
+		expect(series.matches).toHaveLength(2);
+		expect(onUpdate).toHaveBeenCalled();
+		playMatch(1);
+		playMatch(0);
+		expect(series.status).toBe('finished');
+		expect(onEnd).toHaveBeenCalledTimes(2);
+
+		series.setOptions({ format: 'play-all', games: 7 });
+		expect(series.status).toBe('running');
+		expect(series.options).toMatchObject({ games: 7, format: 'play-all' });
+		expect(() => series.setGames(0)).toThrow(RangeError);
+		expect(series.options.games).toBe(7);
+	});
+
+	it('changes the timeouts, also the one running', () => {
+		const { series, playMatch } = setup({ games: 5 });
+		playMatch(0);
+		expect(series.timeoutRefusal('Blue')).toBe('disabled');
+		series.setTimeouts(1, 60);
+		const timeout = series.callTimeout('Blue');
+		expect(timeout.endsAt!.getTime() - timeout.startedAt.getTime()).toBe(60_000);
+
+		series.setTimeoutSeconds(120);
+		expect(series.activeTimeout!.endsAt!.getTime() - timeout.startedAt.getTime()).toBe(120_000);
+		series.setTimeoutSeconds(0);
+		expect(series.activeTimeout!.endsAt).toBeUndefined();
+
+		// Already used more than the new limit: none left, never negative.
+		series.endTimeout();
+		series.setTimeouts(0);
+		expect(series.timeoutsLeft('Blue')).toBe(0);
+		series.setTimeouts(2);
+		expect(series.timeoutsLeft('Blue')).toBe(1);
+	});
+
+	it('ends a running timeout whose new length already passed', () => {
+		vi.useFakeTimers();
+		try {
+			const { series, playMatch } = setup({ timeouts: 1, timeoutSeconds: 300 });
+			playMatch(0);
+			series.callTimeout('Blue');
+			vi.advanceTimersByTime(90_000);
+			series.setTimeoutSeconds(60);
+			expect(series.activeTimeout).toBeUndefined();
+			expect(series.getResult().timeouts[0]).toMatchObject({ endReason: 'expired' });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('does not record matches while paused', () => {
+		const { series, playMatch } = setup({ games: 3, timeouts: 1 });
+		playMatch(0);
+		expect(series.pause()).toBe(true);
+		expect(series.pause()).toBe(false);
+		expect(series.status).toBe('paused');
+		expect(series.paused).toBe(true);
+		expect(series.timeoutRefusal('Blue')).toBe('not-running');
+
+		playMatch(1);
+		playMatch(1);
+		expect(series.matches).toHaveLength(1);
+		// Manual wins still work while paused.
+		series.adjustWins('Orange', 1);
+
+		expect(series.resume()).toBe(true);
+		expect(series.status).toBe('running');
+		playMatch(0);
+		expect(series.status).toBe('finished');
+		expect(series.getResult().winner).toBe('Blue');
+
+		const restored = new EsportsSeries(undefined, { autoStart: false });
+		series.restart();
+		series.pause();
+		restored.restore(JSON.parse(JSON.stringify(series.snapshot())));
+		expect(restored.status).toBe('paused');
+		series.stop();
+		expect(series.status).toBe('stopped');
+	});
+});

@@ -12,9 +12,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `EsportsSeries.removeLastMatch()`: takes back a recorded match.
 - Series snapshots: `series.snapshot()` and `series.restore(snapshot)` save and bring back everything a series stores, also through JSON (dates are revived), so a series survives a restart. A running timeout goes on or expires.
 - `EsportsSeries.onUpdate()`: called after anything stored in the series changes (start, stop, matches, manual wins, timeouts, restore). Handy to save snapshots.
+- Change the options of a series after the constructor, without starting it again: `setOptions({ games, format, timeouts, timeoutSeconds })`, and the shortcuts `setGames()`, `setTimeouts()` and `setTimeoutSeconds()`. The recorded matches stay, and the series ends or goes on again with the new options. A running timeout gets the new length. Also the `options` getter.
+- Pause a series: `pause()` / `resume()` and `paused`. While paused (new status `'paused'`), the matches that end are not recorded and no timeout can be called, for example for a showmatch between two matches of the series.
 
 ### Changed
 
+- `SeriesStatus` has a new value, `'paused'`.
+- `timeoutsLeft` is never negative, also when the limit is lowered.
 - `EsportsSeries.teamOf(teamNum)` before the first match of the series ends gives the team playing on that side right now (it gave `"Blue"` / `"Orange"`).
 
 ## [1.3.0] - 2026-11-20

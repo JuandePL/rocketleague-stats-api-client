@@ -41,8 +41,11 @@ export interface EsportsSeriesOptions extends Partial<SeriesOptions>, MatchTrack
 	games?: number;
 }
 
-/** `idle`: never started. `running`: recording matches. `finished`: reached its end. `stopped`: ended early with {@link EsportsSeries.stop}. */
-export type SeriesStatus = 'idle' | 'running' | 'finished' | 'stopped';
+/**
+ * `idle`: never started. `running`: recording matches. `paused`: not recording for now, see {@link EsportsSeries.pause}.
+ * `finished`: reached its end. `stopped`: ended early with {@link EsportsSeries.stop}.
+ */
+export type SeriesStatus = 'idle' | 'running' | 'paused' | 'finished' | 'stopped';
 
 /**
  * Why a timeout ended. `ended`: {@link EsportsSeries.endTimeout}. `expired`: its `timeoutSeconds` ran out.
@@ -69,7 +72,7 @@ export interface SeriesTimeout {
 export type SeriesTimeoutRefusal =
 	/** The series has `timeouts: 0`. */
 	| 'disabled'
-	/** The series is not running (idle, finished or stopped). */
+	/** The series is not running (idle, paused, finished or stopped). */
 	| 'not-running'
 	/** No match of the series has finished yet: timeouts go between two matches. */
 	| 'no-match-played'
@@ -342,6 +345,79 @@ export class EsportsSeries {
 		return this.#autoStart;
 	}
 
+	/** Options of the series being recorded. Change them with {@link setOptions}. */
+	get options(): Required<SeriesOptions> {
+		return { ...this.#options };
+	}
+
+	/** `true` while the series is paused with {@link pause}. */
+	get paused(): boolean {
+		return this.#status === 'paused';
+	}
+
+	/**
+	 * Changes the options of the series without starting it again: the recorded matches, manual wins and
+	 * timeouts stay. Only the fields given change. With the new options the series can end (`onSeriesEnd` is
+	 * called) or go on again, for example after turning a best of 5 into a best of 7.
+	 *
+	 * - `timeouts`: a team that already used more than the new limit has `0` left.
+	 * - `timeoutSeconds`: a running timeout is given the new length from when it started, and ends right away
+	 *   (`'expired'`) if that time already passed. `0` takes its time limit away.
+	 * @throws {RangeError} for invalid values, like in the constructor. Nothing changes then.
+	 */
+	setOptions(options: Partial<SeriesOptions>): Required<SeriesOptions> {
+		const next = normalizeOptions({ ...this.#options, ...options });
+		const timeoutChanged = next.timeoutSeconds !== this.#options.timeoutSeconds;
+		this.#options = next;
+		const active = this.#activeTimeout;
+		if (timeoutChanged && active) {
+			active.endsAt = next.timeoutSeconds > 0 ? new Date(active.startedAt.getTime() + next.timeoutSeconds * 1000) : undefined;
+			if (active.endsAt && active.endsAt.getTime() <= Date.now()) this.#finishTimeout('expired');
+			else this.#armTimeoutTimer(active);
+		}
+		this.#updateStatus();
+		this.#emitUpdate();
+		return { ...next };
+	}
+
+	/** Number of matches (`games`) and, optionally, the format. Same as {@link setOptions}. */
+	setGames(games: number, format?: SeriesFormat): Required<SeriesOptions> {
+		return this.setOptions(format ? { games, format } : { games });
+	}
+
+	/** Timeouts per team and, optionally, their length in seconds. Same as {@link setOptions}. */
+	setTimeouts(timeouts: number, timeoutSeconds?: number): Required<SeriesOptions> {
+		return this.setOptions(timeoutSeconds === undefined ? { timeouts } : { timeouts, timeoutSeconds });
+	}
+
+	/** Length of the timeouts in seconds (`0`: no limit). Same as {@link setOptions}. */
+	setTimeoutSeconds(timeoutSeconds: number): Required<SeriesOptions> {
+		return this.setOptions({ timeoutSeconds });
+	}
+
+	/**
+	 * Pauses a running series: the matches that end (or are left) while it is paused are not recorded, and no
+	 * timeout can be called. Handy for a showmatch or a test between two matches of the series. The results,
+	 * a running timeout and the manual wins stay. Does nothing unless the series is `running`.
+	 * Returns `true` when it paused.
+	 */
+	pause(): boolean {
+		if (this.#status !== 'running') return false;
+		this.#status = 'paused';
+		this.#emitUpdate();
+		return true;
+	}
+
+	/** Records matches again after {@link pause}. Returns `true` when it resumed. */
+	resume(): boolean {
+		if (this.#status !== 'paused') return false;
+		this.#status = 'running';
+		// Options or wins changed while paused can end the series.
+		this.#updateStatus();
+		this.#emitUpdate();
+		return true;
+	}
+
 	/** Recorded matches, in order. */
 	get matches(): readonly MatchSummary[] {
 		return this.#matches;
@@ -375,7 +451,7 @@ export class EsportsSeries {
 	/** Stops recording, including the automatic restart. The matches played so far stay in {@link getResult}. */
 	stop(): void {
 		this.#finishTimeout('cancelled');
-		if (this.#status === 'running') this.#status = 'stopped';
+		if (this.#status === 'running' || this.#status === 'paused') this.#status = 'stopped';
 		this.#stoppedByUser = true;
 		this.#emitUpdate();
 	}
@@ -528,9 +604,9 @@ export class EsportsSeries {
 		return timeouts.filter((timeout) => timeout.team === team).length;
 	}
 
-	/** Never negative: `callTimeout` stops at the limit, and `start()` changes the limit and clears the timeouts together. */
+	/** Never negative, also after `setOptions()` lowers the limit. */
 	#timeoutsLeftOf(team: string, timeouts: readonly SeriesTimeout[] = this.#timeouts): number {
-		return this.#options.timeouts - this.#timeoutsUsed(team, timeouts);
+		return Math.max(0, this.#options.timeouts - this.#timeoutsUsed(team, timeouts));
 	}
 
 	/** Called every time a series starts, including automatic restarts. Returns a function that removes the listener. */
@@ -610,13 +686,13 @@ export class EsportsSeries {
 	 * Adds wins to a team by hand (or removes them with a negative `delta`), for example for a match played
 	 * outside the game's view, a forfeit, or to fix the score. `team` is a name or a `TeamNum` (see
 	 * {@link teamOf}). A team's wins never go below `0`. The series can end, or go on again, with the change:
-	 * `onSeriesEnd` is called if it ends. Only while the series is `running` or `finished`.
+	 * `onSeriesEnd` is called if it ends. Only while the series is `running`, `paused` or `finished`.
 	 * Cleared by {@link start} and {@link restart}. Returns the team's wins after the change.
 	 */
 	adjustWins(teamOrNum: string | TeamNum, delta: number): number {
 		if (!Number.isInteger(delta)) throw new RangeError(`delta must be an integer, got ${delta}.`);
 		const team = this.teamOf(teamOrNum);
-		if (this.#status !== 'running' && this.#status !== 'finished') return this.#winsOf(team);
+		if (this.#status !== 'running' && this.#status !== 'finished' && this.#status !== 'paused') return this.#winsOf(team);
 		const manual = this.#manualWins.get(team) ?? 0;
 		const played = this.#winsOf(team) - manual;
 		const next = Math.max(-played, manual + delta);
@@ -703,7 +779,7 @@ export class EsportsSeries {
 		const data = reviveDates(snapshot);
 		this.#clearTimeoutTimer();
 		this.#options = normalizeOptions(data.options ?? {});
-		this.#status = (['idle', 'running', 'finished', 'stopped'] as const).includes(data.status) ? data.status : 'running';
+		this.#status = (['idle', 'running', 'paused', 'finished', 'stopped'] as const).includes(data.status) ? data.status : 'running';
 		this.#stoppedByUser = data.stoppedByUser === true;
 		this.#matches = [...data.matches];
 		this.#abortedMatches = [...(data.abortedMatches ?? [])];
