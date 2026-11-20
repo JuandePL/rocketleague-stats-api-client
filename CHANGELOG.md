@@ -5,17 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-20
+
 ### Added
 
-- Rates and percentages for players and teams:
+- Rates and percentages for players and teams ([#14]):
   - **Match player results:** `shootingPercent` (goals / shots), `goalParticipation` (goals + assists over the team's goals), `boostPerMinute`, `secondsPlayed` (play time the player was in) and `won` (set once the match ended).
   - **Match team results:** new `MatchSummary.teamResults` and `tracker.getTeamResults()`, with goals, shots, `shootingPercent`, `won`, boost used, `boostPerMinute` and possession.
   - **Series:** teams get `matches`, `winPercent`, `shots`, `shootingPercent`, `boostPerMinute` and `secondsPlayed`. Players get `wins`, `winPercent`, `secondsPlayed`, `teamGoals`, `shootingPercent`, `goalParticipation` and `boostPerMinute`. The match being played doesn't count for `winPercent`.
   - `getTeamTotals()` includes `shootingPercent`.
   - Helpers `percentOf()` and `perMinute()`.
-- Timeouts in `EsportsSeries`: with the `timeouts` option, each team can call timeouts between the end of a match and the start of the next one, with `callTimeout(team)`, by team name or by `TeamNum` in the last finished match. They end with `endTimeout()`, when `timeoutSeconds` run out, or when the next match starts. Also `canCallTimeout()`, `timeoutRefusal()`, `timeoutsLeft()`, `hasTimeoutsLeft()`, `teamOf()`, `activeTimeout`, the `onTimeoutStart` / `onTimeoutEnd` listeners and `SeriesTimeoutError`. Results include `timeouts`, `activeTimeout`, and `timeoutsUsed` / `timeoutsLeft` per team.
-- `MatchTracker.onMatchStart()` and `matchStarted`: the match started with `MatchInitialized` (or from the first `UpdateState` when joining mid-match), unlike `matchInProgress`, which is already `true` in the lobby after `MatchCreated`.
-- Matches left before their end: when the lobby is destroyed (`MatchDestroyed`) without `MatchEnded`, `MatchTracker` stops the match (`matchAborted`, `matchStarted` back to `false`) and calls `onMatchAbort()` with an `AbortedMatchSummary`: the stats until then, without a winner. A match left before anything was played is dropped. `EsportsSeries` keeps them in `abortedMatches` (also in the results) and calls `onMatchAbort()`; they don't count for wins, totals or the end of the series.
+- Timeouts in `EsportsSeries` ([#15]): with the `timeouts` option, each team can call timeouts between the end of a match and the start of the next one, with `callTimeout(team)`, by team name or by `TeamNum` in the last finished match. They end with `endTimeout()`, when `timeoutSeconds` run out, or when the next match starts. Also `canCallTimeout()`, `timeoutRefusal()`, `timeoutsLeft()`, `hasTimeoutsLeft()`, `teamOf()`, `activeTimeout`, the `onTimeoutStart` / `onTimeoutEnd` listeners and `SeriesTimeoutError`. Results include `timeouts`, `activeTimeout`, and `timeoutsUsed` / `timeoutsLeft` per team.
+- `MatchTracker.onMatchStart()` and `matchStarted` ([#15]): the match started with `MatchInitialized` (or from the first `UpdateState` when joining mid-match), unlike `matchInProgress`, which is already `true` in the lobby after `MatchCreated`.
+- Matches left before their end ([#16]): when the lobby is destroyed (`MatchDestroyed`) without `MatchEnded`, `MatchTracker` stops the match (`matchAborted`, `matchStarted` back to `false`) and calls `onMatchAbort()` with an `AbortedMatchSummary`: the stats until then, without a winner. A match left before anything was played is dropped. `EsportsSeries` keeps them in `abortedMatches` (also in the results) and calls `onMatchAbort()`; they don't count for wins, totals or the end of the series.
 
 ### Fixed
 
@@ -109,7 +111,8 @@ First stable release, published as `@juande_pl/rocketleague-stats-api-client`.
 
 - The package was renamed from `rocketleague-stats-api-client` to `@juande_pl/rocketleague-stats-api-client`.
 
-[Unreleased]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/JuandePL/rocketleague-stats-api-client/releases/tag/v1.0.0
@@ -119,3 +122,6 @@ First stable release, published as `@juande_pl/rocketleague-stats-api-client`.
 [#9]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/9
 [#11]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/11
 [#12]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/12
+[#14]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/14
+[#15]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/15
+[#16]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/16
