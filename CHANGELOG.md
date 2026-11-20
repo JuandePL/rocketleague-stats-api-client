@@ -5,21 +5,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-20
+
 ### Added
 
-- `identifyTeam` option for `MatchTracker` and `EsportsSeries`: gives the teams your own names in every result (`MatchTeamResult.name`, `MatchPlayerResult.team`, `PlayerSession.team`, series teams), for example the teams of a broadcast when the names set in the game don't match, or when teams switch sides. Each finished match keeps the names it was played with. Also `tracker.teamNameOf(teamNum)`.
-- Manual wins in `EsportsSeries`: `adjustWins(team, delta)`, `setWins(team, wins)` and `winsOf(team)`, to fix the score or count a match played elsewhere. The series ends, or goes on again, with them. Results include `manualWins` (per team and for the series).
-- `EsportsSeries.removeLastMatch()`: takes back a recorded match.
-- Series snapshots: `series.snapshot()` and `series.restore(snapshot)` save and bring back everything a series stores, also through JSON (dates are revived), so a series survives a restart. A running timeout goes on or expires.
-- `EsportsSeries.onUpdate()`: called after anything stored in the series changes (start, stop, matches, manual wins, timeouts, restore). Handy to save snapshots.
-- Change the options of a series after the constructor, without starting it again: `setOptions({ games, format, timeouts, timeoutSeconds })`, and the shortcuts `setGames()`, `setTimeouts()` and `setTimeoutSeconds()`. The recorded matches stay, and the series ends or goes on again with the new options. A running timeout gets the new length. Also the `options` getter.
-- Pause a series: `pause()` / `resume()` and `paused`. While paused (new status `'paused'`), the matches that end are not recorded and no timeout can be called, for example for a showmatch between two matches of the series.
+- `identifyTeam` option for `MatchTracker` and `EsportsSeries`: gives the teams your own names in every result (`MatchTeamResult.name`, `MatchPlayerResult.team`, `PlayerSession.team`, series teams), for example the teams of a broadcast when the names set in the game don't match, or when teams switch sides. Each finished match keeps the names it was played with. Also `tracker.teamNameOf(teamNum)` ([#18]).
+- Manual wins in `EsportsSeries`: `adjustWins(team, delta)`, `setWins(team, wins)` and `winsOf(team)`, to fix the score or count a match played elsewhere. The series ends, or goes on again, with them. Results include `manualWins` (per team and for the series) ([#18]).
+- `EsportsSeries.removeLastMatch()`: takes back a recorded match ([#18]).
+- Series snapshots: `series.snapshot()` and `series.restore(snapshot)` save and bring back everything a series stores, also through JSON (dates are revived), so a series survives a restart. A running timeout goes on or expires ([#18]).
+- `EsportsSeries.onUpdate()`: called after anything stored in the series changes (start, stop, matches, manual wins, timeouts, restore). Handy to save snapshots ([#18]).
+- Change the options of a series after the constructor, without starting it again: `setOptions({ games, format, timeouts, timeoutSeconds })`, and the shortcuts `setGames()`, `setTimeouts()` and `setTimeoutSeconds()`. The recorded matches stay, and the series ends or goes on again with the new options. A running timeout gets the new length. Also the `options` getter ([#19]).
+- Pause a series: `pause()` / `resume()` and `paused`. While paused (new status `'paused'`), the matches that end are not recorded and no timeout can be called, for example for a showmatch between two matches of the series ([#19]).
 
 ### Changed
 
-- `SeriesStatus` has a new value, `'paused'`.
-- `timeoutsLeft` is never negative, also when the limit is lowered.
-- `EsportsSeries.teamOf(teamNum)` before the first match of the series ends gives the team playing on that side right now (it gave `"Blue"` / `"Orange"`).
+- `SeriesStatus` has a new value, `'paused'` ([#19]).
+- `timeoutsLeft` is never negative, also when the limit is lowered ([#19]).
+- `EsportsSeries.teamOf(teamNum)` before the first match of the series ends gives the team playing on that side right now (it gave `"Blue"` / `"Orange"`) ([#18]).
 
 ## [1.3.0] - 2026-11-20
 
@@ -127,7 +129,8 @@ First stable release, published as `@juande_pl/rocketleague-stats-api-client`.
 
 - The package was renamed from `rocketleague-stats-api-client` to `@juande_pl/rocketleague-stats-api-client`.
 
-[Unreleased]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.0.0...v1.1.0
@@ -141,3 +144,5 @@ First stable release, published as `@juande_pl/rocketleague-stats-api-client`.
 [#14]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/14
 [#15]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/15
 [#16]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/16
+[#18]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/18
+[#19]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/19
