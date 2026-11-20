@@ -1691,3 +1691,128 @@ describe('EsportsSeries', () => {
 		expect(() => series.start({ games: 2.5 })).toThrow(RangeError);
 	});
 });
+
+describe('EsportsSeries: team names, manual wins and snapshots', () => {
+	function setup(options: EsportsSeriesOptions = {}) {
+		const series = new EsportsSeries(undefined, options);
+		const match = new Match((event) => series.tracker.handle(event));
+		const playMatch = (winner: 0 | 1, score: [number, number]) => {
+			match.players = [player('Ana', 0, { Score: 400 }), player('Bob', 1, { Score: 300 })];
+			match.start();
+			match.hit(winner, winner === 0 ? 1000 : -1000);
+			match.play(10);
+			match.end(winner, score);
+		};
+		return { series, match, playMatch };
+	}
+
+	it('names the teams with identifyTeam, and keeps each match with the names it was played with', () => {
+		const sides: Record<number, string> = { 0: 'Karmine', 1: 'Vitality' };
+		const { series, playMatch, match } = setup({ games: 5, identifyTeam: (team) => sides[team.TeamNum]! });
+		playMatch(0, [2, 1]);
+		// The teams switch sides for the next match.
+		sides[0] = 'Vitality';
+		sides[1] = 'Karmine';
+		playMatch(0, [3, 0]);
+
+		const result = series.getResult();
+		// Same wins: Vitality first on goals (1 + 3 against 2 + 0).
+		expect(result.teams.map((team) => [team.name, team.wins, team.goals])).toEqual([
+			['Vitality', 1, 4],
+			['Karmine', 1, 2],
+		]);
+		expect(result.matches[0]!.teamResults.map((team) => team.name)).toEqual(['Karmine', 'Vitality']);
+		expect(result.players.find((p) => p.Name === 'Ana')!.team).toBe('Vitality');
+		expect(series.teamOf(0)).toBe('Vitality');
+
+		match.players = [player('Ana', 0), player('Bob', 1)];
+		match.start();
+		expect(series.tracker.teamNameOf(1)).toBe('Karmine');
+		expect(series.tracker.getTeamResults().map((team) => team.name)).toEqual(['Vitality', 'Karmine']);
+	});
+
+	it('adds and removes wins by hand, and the series can end or go on with them', () => {
+		const { series, playMatch } = setup({ games: 3 });
+		const onEnd = vi.fn();
+		const onUpdate = vi.fn();
+		series.onSeriesEnd(onEnd);
+		series.onUpdate(onUpdate);
+
+		expect(series.adjustWins('Blue', 1)).toBe(1);
+		expect(onUpdate).toHaveBeenCalledOnce();
+		expect(series.getResult().teams).toMatchObject([{ name: 'Blue', wins: 1, manualWins: 1, matches: 0, winPercent: 0 }]);
+
+		playMatch(0, [1, 0]);
+		expect(series.status).toBe('finished');
+		expect(onEnd).toHaveBeenCalledOnce();
+		expect(series.getResult()).toMatchObject({ winner: 'Blue', manualWins: { Blue: 1 } });
+		expect(series.getResult().teams[0]).toMatchObject({ wins: 2, winPercent: 100 });
+
+		// Taking the manual win back: the series goes on.
+		series.adjustWins(0, -1);
+		expect(series.status).toBe('running');
+		expect(series.winsOf('Blue')).toBe(1);
+		// Wins never go below 0.
+		expect(series.adjustWins('Orange', -3)).toBe(0);
+		expect(series.setWins('Orange', 2)).toBe(2);
+		expect(series.status).toBe('finished');
+		expect(series.getResult().winner).toBe('Orange');
+		expect(onEnd).toHaveBeenCalledTimes(2);
+
+		series.restart();
+		expect(series.getResult().teams).toEqual([]);
+		expect(series.getResult().manualWins).toEqual({});
+	});
+
+	it('removes the last match', () => {
+		const { series, playMatch } = setup({ games: 3 });
+		playMatch(0, [1, 0]);
+		playMatch(0, [2, 0]);
+		expect(series.status).toBe('finished');
+		expect(series.removeLastMatch()?.teams[0]?.Score).toBe(2);
+		expect(series.status).toBe('running');
+		expect(series.winsOf('Blue')).toBe(1);
+		series.removeLastMatch();
+		expect(series.removeLastMatch()).toBeUndefined();
+	});
+
+	it('restores a snapshot, also after JSON', () => {
+		const { series, playMatch } = setup({ games: 5, timeouts: 1, timeoutSeconds: 60 });
+		playMatch(0, [1, 0]);
+		series.adjustWins('Orange', 1);
+		series.callTimeout('Orange');
+		const json = JSON.parse(JSON.stringify(series.snapshot()));
+
+		const other = setup({ autoStart: false }).series;
+		const onUpdate = vi.fn();
+		other.onUpdate(onUpdate);
+		other.restore(json);
+		expect(onUpdate).toHaveBeenCalledOnce();
+		expect(other.status).toBe('running');
+		expect(other.getResult()).toMatchObject({ options: { games: 5, timeouts: 1 }, manualWins: { Orange: 1 } });
+		expect(other.matches[0]!.endedAt).toBeInstanceOf(Date);
+		expect(other.matches[0]!.endMoment.date).toBeInstanceOf(Date);
+		expect(other.activeTimeout).toMatchObject({ team: 'Orange' });
+		expect(other.activeTimeout!.endsAt).toBeInstanceOf(Date);
+		expect(other.winsOf('Blue')).toBe(1);
+		expect(other.winsOf('Orange')).toBe(1);
+		expect(() => other.restore({} as never)).toThrow(TypeError);
+		other.dispose();
+		series.dispose();
+	});
+
+	it('ends a restored timeout whose time already ran out', () => {
+		const { series, playMatch } = setup({ timeouts: 1, timeoutSeconds: 60 });
+		playMatch(0, [1, 0]);
+		series.callTimeout('Blue');
+		const snapshot = series.snapshot();
+		snapshot.timeouts[0]!.endsAt = new Date(Date.now() - 1000);
+		const onEnd = vi.fn();
+		const other = new EsportsSeries(undefined, { autoStart: false });
+		other.onTimeoutEnd(onEnd);
+		other.restore(snapshot);
+		expect(other.activeTimeout).toBeUndefined();
+		expect(onEnd.mock.calls[0]![0]).toMatchObject({ team: 'Blue', endReason: 'expired' });
+		series.dispose();
+	});
+});

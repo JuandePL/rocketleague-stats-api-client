@@ -119,7 +119,7 @@ export function formatMatchClock(timeSeconds: number, overtime = false, options:
  */
 export interface PlayerSession {
 	TeamNum: TeamNum;
-	/** Name of the team (`Game.Teams[].Name`). */
+	/** Name of the team (`Game.Teams[].Name`, or the `identifyTeam` option). */
 	team: string;
 	/** First `UpdateState` the player was in. */
 	joinedAt: MatchMoment;
@@ -137,7 +137,7 @@ export interface PlayerSession {
  * Players who left before the end keep the stats they had when they were last seen.
  */
 export interface MatchPlayerResult extends TrackedPlayerStats {
-	/** Name of the player's team (`Game.Teams[].Name`). */
+	/** Name of the player's team (`Game.Teams[].Name`, or the `identifyTeam` option). */
 	team: string;
 	/** `true` for the match MVP. Players who left before the end can't be MVP. */
 	mvp: boolean;
@@ -183,7 +183,7 @@ export interface MatchPlayerResult extends TrackedPlayerStats {
 /** Everything about one team in one match. */
 export interface MatchTeamResult {
 	TeamNum: TeamNum;
-	/** `Game.Teams[].Name`. */
+	/** `Game.Teams[].Name`, or the `identifyTeam` option. */
 	name: string;
 	/** Team score, own goals of the other team included. */
 	goals: number;
@@ -293,7 +293,17 @@ export interface MatchTrackerOptions {
 	 * Players from events other than `UpdateState` may come without `PrimaryId`.
 	 */
 	identifyPlayer?: PlayerIdentifier;
+	/**
+	 * Name of a team in every result (`MatchTeamResult.name`, `MatchPlayerResult.team`, `PlayerSession.team`).
+	 * Defaults to {@link teamName}: `Game.Teams[].Name`, or `"Blue"` / `"Orange"` when the game sends none.
+	 * Use it to give the teams your own names or ids, for example the teams of a broadcast, when the
+	 * names set in the game don't match. An empty result falls back to the default.
+	 */
+	identifyTeam?: TeamIdentifier;
 }
+
+/** Gives a team its name in the results. `team.Name` is the game's name, or `"Blue"` / `"Orange"` when there is none. */
+export type TeamIdentifier = (team: { TeamNum: TeamNum; Name: string }) => string;
 
 /** `true` when the car is driving on a wall (only known while spectating). */
 function isOnWall(player: Player): boolean {
@@ -367,11 +377,26 @@ export class MatchTracker {
 
 	/** Pass a client to start tracking right away, or call {@link handle} with events yourself. */
 	readonly #identify: PlayerIdentifier;
+	readonly #identifyTeam: TeamIdentifier | undefined;
 
 	/** Pass a client to start tracking right away, or call {@link handle} with events yourself. */
 	constructor(source?: StatsEventSource, options: MatchTrackerOptions = {}) {
 		this.#identify = options.identifyPlayer ?? playerKey;
+		this.#identifyTeam = options.identifyTeam;
 		if (source) this.attach(source);
+	}
+
+	/**
+	 * Name of the team playing on `teamNum` in the current match, as used in the results: from the
+	 * `identifyTeam` option, else `Game.Teams[].Name`, else `"Blue"` / `"Orange"`.
+	 */
+	teamNameOf(teamNum: TeamNum): string {
+		return this.#teamName(this.getTeams(), teamNum);
+	}
+
+	#teamName(teams: readonly GameTeam[], teamNum: TeamNum): string {
+		const name = teamName(teams, teamNum);
+		return this.#identifyTeam?.({ TeamNum: teamNum, Name: name }) || name;
 	}
 
 	/** The key of a player, as used in `key` and in every result. */
@@ -838,7 +863,7 @@ export class MatchTracker {
 			const boostUsed = side ? stats.boost.teams[side] : 0;
 			return {
 				TeamNum: team.TeamNum,
-				name: teamName(teams, team.TeamNum),
+				name: this.#teamName(teams, team.TeamNum),
 				goals: team.Score,
 				shots,
 				shootingPercent: percentOf(playerGoals, shots),
@@ -873,7 +898,7 @@ export class MatchTracker {
 				const sessions = (this.#players.get(key)?.sessions ?? []).map(
 					(session): PlayerSession => ({
 						TeamNum: session.TeamNum,
-						team: teamName(teams, session.TeamNum),
+						team: this.#teamName(teams, session.TeamNum),
 						joinedAt: { ...session.joinedAt },
 						...(session.leftAt ? { leftAt: { ...session.leftAt } } : {}),
 						switchedTeam: session.switchedTeam,
@@ -891,7 +916,7 @@ export class MatchTracker {
 					Name: player.Name,
 					Shortcut: player.Shortcut,
 					TeamNum: player.TeamNum,
-					team: teamName(teams, player.TeamNum),
+					team: this.#teamName(teams, player.TeamNum),
 					mvp: key === mvpKey,
 					leftEarly,
 					...(leftAt ? { leftAt: { ...leftAt } } : {}),

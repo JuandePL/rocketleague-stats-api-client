@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `identifyTeam` option for `MatchTracker` and `EsportsSeries`: gives the teams your own names in every result (`MatchTeamResult.name`, `MatchPlayerResult.team`, `PlayerSession.team`, series teams), for example the teams of a broadcast when the names set in the game don't match, or when teams switch sides. Each finished match keeps the names it was played with. Also `tracker.teamNameOf(teamNum)`.
+- Manual wins in `EsportsSeries`: `adjustWins(team, delta)`, `setWins(team, wins)` and `winsOf(team)`, to fix the score or count a match played elsewhere. The series ends, or goes on again, with them. Results include `manualWins` (per team and for the series).
+- `EsportsSeries.removeLastMatch()`: takes back a recorded match.
+- Series snapshots: `series.snapshot()` and `series.restore(snapshot)` save and bring back everything a series stores, also through JSON (dates are revived), so a series survives a restart. A running timeout goes on or expires.
+- `EsportsSeries.onUpdate()`: called after anything stored in the series changes (start, stop, matches, manual wins, timeouts, restore). Handy to save snapshots.
+
+### Changed
+
+- `EsportsSeries.teamOf(teamNum)` before the first match of the series ends gives the team playing on that side right now (it gave `"Blue"` / `"Orange"`).
+
 ## [1.3.0] - 2026-11-20
 
 ### Added

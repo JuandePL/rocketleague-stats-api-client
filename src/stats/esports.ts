@@ -118,6 +118,11 @@ export interface SeriesTeamResult {
 	timeoutsUsed: number;
 	/** Timeouts the team can still call (the `timeouts` option minus `timeoutsUsed`). */
 	timeoutsLeft: number;
+	/**
+	 * Wins added or removed by hand with {@link EsportsSeries.adjustWins}, already counted in `wins`
+	 * (but not in `winPercent`, which only looks at the matches played).
+	 */
+	manualWins: number;
 }
 
 /** A player's totals over the series. The results of each match are in `MatchSummary.playerResults`. */
@@ -203,16 +208,66 @@ export interface SeriesResult {
 	timeouts: SeriesTimeout[];
 	/** The timeout running right now, if any. */
 	activeTimeout: SeriesTimeout | undefined;
+	/** Wins added or removed by hand with {@link EsportsSeries.adjustWins}, by team name. Already counted in `teams`. */
+	manualWins: Record<string, number>;
+}
+
+/**
+ * Everything an {@link EsportsSeries} stores, to save it and bring it back later with {@link EsportsSeries.restore},
+ * for example after a restart. It can go through `JSON.stringify` / `JSON.parse`: dates become strings and
+ * `restore()` turns them back into dates. The match being played is not included.
+ */
+export interface SeriesSnapshot {
+	version: 1;
+	status: SeriesStatus;
+	options: Required<SeriesOptions>;
+	/** `true` after {@link EsportsSeries.stop}: no automatic restart. */
+	stoppedByUser: boolean;
+	matches: MatchSummary[];
+	abortedMatches: AbortedMatchSummary[];
+	timeouts: SeriesTimeout[];
+	/** Index in `timeouts` of the running timeout, if any. */
+	activeTimeout: number | undefined;
+	manualWins: Record<string, number>;
 }
 
 /** What the series totals need from a match. A match in progress has no `winnerTeamNum` yet. */
-type CountedMatch = Pick<MatchSummary, 'teams' | 'boost' | 'possession' | 'playerResults' | 'secondsPlayed'> & { winnerTeamNum?: TeamNum };
+type CountedMatch = Pick<MatchSummary, 'teams' | 'boost' | 'possession' | 'playerResults' | 'secondsPlayed'> & {
+	winnerTeamNum?: TeamNum;
+	/** Holds the team names given when the match was played (see the `identifyTeam` option). */
+	teamResults?: readonly { TeamNum: TeamNum; name: string }[];
+};
+
+/** Name of the team on `teamNum` in a match: the name stored in its results, so it doesn't change afterwards. */
+function nameIn(match: CountedMatch, teamNum: TeamNum): string {
+	return match.teamResults?.find((team) => team.TeamNum === teamNum)?.name || teamName(match.teams, teamNum);
+}
+
+/** Keys that hold dates in a series, turned back from strings by `restore()`. */
+const DATE_KEYS = new Set(['date', 'endedAt', 'startedAt', 'endsAt']);
+
+/** Deep copy that turns the ISO strings of {@link DATE_KEYS} back into dates. */
+function reviveDates<T>(value: T, key = ''): T {
+	if (Array.isArray(value)) return value.map((item) => reviveDates(item)) as T;
+	if (value instanceof Date) return new Date(value.getTime()) as T;
+	if (typeof value === 'string' && DATE_KEYS.has(key)) {
+		const date = new Date(value);
+		return (Number.isNaN(date.getTime()) ? value : date) as T;
+	}
+	if (value && typeof value === 'object') {
+		const copy: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value)) copy[k] = reviveDates(v, k);
+		return copy as T;
+	}
+	return value;
+}
 
 export type SeriesStartListener = (options: Required<SeriesOptions>) => void;
 export type SeriesMatchListener = (match: MatchSummary, series: SeriesResult) => void;
 export type SeriesMatchAbortListener = (match: AbortedMatchSummary, series: SeriesResult) => void;
 export type SeriesEndListener = (series: SeriesResult) => void;
 export type SeriesTimeoutListener = (timeout: SeriesTimeout, series: SeriesResult) => void;
+export type SeriesUpdateListener = (series: SeriesResult) => void;
 
 function normalizeOptions(options: Partial<SeriesOptions>): Required<SeriesOptions> {
 	const games = options.games ?? 5;
@@ -259,7 +314,9 @@ export class EsportsSeries {
 	readonly #endListeners = new Set<SeriesEndListener>();
 	readonly #timeoutStartListeners = new Set<SeriesTimeoutListener>();
 	readonly #timeoutEndListeners = new Set<SeriesTimeoutListener>();
+	readonly #updateListeners = new Set<SeriesUpdateListener>();
 	#timeouts: SeriesTimeout[] = [];
+	#manualWins = new Map<string, number>();
 	#activeTimeout: SeriesTimeout | undefined;
 	#timeoutTimer: ReturnType<typeof setTimeout> | undefined;
 	readonly #unsubscribe: Unsubscribe;
@@ -269,7 +326,7 @@ export class EsportsSeries {
 	constructor(source?: StatsEventSource, options: EsportsSeriesOptions = {}) {
 		this.#options = normalizeOptions(options);
 		this.#autoStart = options.autoStart ?? true;
-		this.tracker = new MatchTracker(source, { identifyPlayer: options.identifyPlayer });
+		this.tracker = new MatchTracker(source, { identifyPlayer: options.identifyPlayer, identifyTeam: options.identifyTeam });
 		this.#unsubscribe = this.tracker.onMatchEnd((summary) => this.#record(summary));
 		this.#unsubscribeStart = this.tracker.onMatchStart(() => this.#finishTimeout('match-started'));
 		this.#unsubscribeAbort = this.tracker.onMatchAbort((summary) => this.#recordAbort(summary));
@@ -303,9 +360,11 @@ export class EsportsSeries {
 		this.#matches = [];
 		this.#abortedMatches = [];
 		this.#timeouts = [];
+		this.#manualWins = new Map();
 		this.#status = 'running';
 		this.#stoppedByUser = false;
 		for (const listener of [...this.#startListeners]) listener({ ...this.#options });
+		this.#emitUpdate();
 	}
 
 	/** Starts the series again with the same options. Clears the stored matches. */
@@ -318,6 +377,7 @@ export class EsportsSeries {
 		this.#finishTimeout('cancelled');
 		if (this.#status === 'running') this.#status = 'stopped';
 		this.#stoppedByUser = true;
+		this.#emitUpdate();
 	}
 
 	/** Stops listening to the client. A running timeout is cancelled. */
@@ -340,7 +400,9 @@ export class EsportsSeries {
 	 */
 	teamOf(team: string | TeamNum): string {
 		if (typeof team === 'string') return team;
-		return teamName(this.#matches.at(-1)?.teams ?? [], team);
+		const last = this.#matches.at(-1);
+		// Before the first match ends, the side the team plays on right now.
+		return last ? nameIn(last, team) : this.tracker.teamNameOf(team);
 	}
 
 	/** Timeouts `team` (name or `TeamNum`, see {@link teamOf}) can still call in this series. `0` for a team that didn't play in it. */
@@ -403,13 +465,10 @@ export class EsportsSeries {
 		};
 		this.#timeouts.push(timeout);
 		this.#activeTimeout = timeout;
-		if (timeoutSeconds > 0) {
-			this.#timeoutTimer = setTimeout(() => this.#finishTimeout('expired'), timeoutSeconds * 1000);
-			// Don't keep a Node process alive only for the timer.
-			(this.#timeoutTimer as { unref?: () => void }).unref?.();
-		}
+		this.#armTimeoutTimer(timeout);
 		const result = this.getResult();
 		for (const listener of [...this.#timeoutStartListeners]) listener(copyTimeout(timeout), result);
+		this.#emitUpdate(result);
 		return copyTimeout(timeout);
 	}
 
@@ -430,23 +489,38 @@ export class EsportsSeries {
 		return () => this.#timeoutEndListeners.delete(listener);
 	}
 
-	#finishTimeout(reason: SeriesTimeoutEndReason): SeriesTimeout | undefined {
+	#finishTimeout(reason: SeriesTimeoutEndReason, endedAt = new Date()): SeriesTimeout | undefined {
 		const timeout = this.#activeTimeout;
 		if (!timeout) return undefined;
-		clearTimeout(this.#timeoutTimer);
-		this.#timeoutTimer = undefined;
+		this.#clearTimeoutTimer();
 		this.#activeTimeout = undefined;
-		timeout.endedAt = new Date();
+		timeout.endedAt = endedAt;
 		timeout.endReason = reason;
 		const result = this.getResult();
 		for (const listener of [...this.#timeoutEndListeners]) listener(copyTimeout(timeout), result);
+		this.#emitUpdate(result);
 		return copyTimeout(timeout);
+	}
+
+	#clearTimeoutTimer(): void {
+		clearTimeout(this.#timeoutTimer);
+		this.#timeoutTimer = undefined;
+	}
+
+	/** Ends the running timeout when its `endsAt` comes. */
+	#armTimeoutTimer(timeout: SeriesTimeout): void {
+		this.#clearTimeoutTimer();
+		if (!timeout.endsAt) return;
+		const delay = Math.max(0, timeout.endsAt.getTime() - Date.now());
+		this.#timeoutTimer = setTimeout(() => this.#finishTimeout('expired'), delay);
+		// Don't keep a Node process alive only for the timer.
+		(this.#timeoutTimer as { unref?: () => void }).unref?.();
 	}
 
 	/** Teams that played a finished match of the series. */
 	#teamNames(): Set<string> {
 		const names = new Set<string>();
-		for (const match of this.#matches) for (const teamNum of [0, 1]) names.add(teamName(match.teams, teamNum));
+		for (const match of this.#matches) for (const teamNum of [0, 1]) names.add(nameIn(match, teamNum));
 		return names;
 	}
 
@@ -487,6 +561,7 @@ export class EsportsSeries {
 		this.#abortedMatches.push(summary);
 		const result = this.getResult();
 		for (const listener of [...this.#abortListeners]) listener(summary, result);
+		this.#emitUpdate(result);
 	}
 
 	/** Called once when the series reaches its end. Returns a function that removes the listener. */
@@ -505,17 +580,152 @@ export class EsportsSeries {
 		const result = this.getResult();
 		for (const listener of [...this.#matchListeners]) listener(summary, result);
 		if (this.#status === 'finished') for (const listener of [...this.#endListeners]) listener(result);
+		this.#emitUpdate(result);
 	}
 
 	#isOver(): boolean {
 		const { games, format } = this.#options;
-		if (this.#matches.length >= games) return true;
+		// Wins added by hand stand for matches played somewhere else (a forfeit, a crash...).
+		let added = 0;
+		for (const team of this.#teams(this.#matches)) added += Math.max(0, team.manualWins);
+		if (this.#matches.length + added >= games) return true;
 		if (format !== 'best-of') return false;
 		const needed = Math.floor(games / 2) + 1;
 		return this.#teams(this.#matches).some((team) => team.wins >= needed);
 	}
 
-	#teams(matches: readonly CountedMatch[], timeouts: readonly SeriesTimeout[] = this.#timeouts): SeriesTeamResult[] {
+	/** After the stored matches or wins change by hand: the series can end, or go on again. */
+	#updateStatus(): void {
+		if (this.#status === 'running' && this.#isOver()) {
+			this.#status = 'finished';
+			this.#finishTimeout('cancelled');
+			const result = this.getResult();
+			for (const listener of [...this.#endListeners]) listener(result);
+		} else if (this.#status === 'finished' && !this.#isOver()) {
+			this.#status = 'running';
+		}
+	}
+
+	/**
+	 * Adds wins to a team by hand (or removes them with a negative `delta`), for example for a match played
+	 * outside the game's view, a forfeit, or to fix the score. `team` is a name or a `TeamNum` (see
+	 * {@link teamOf}). A team's wins never go below `0`. The series can end, or go on again, with the change:
+	 * `onSeriesEnd` is called if it ends. Only while the series is `running` or `finished`.
+	 * Cleared by {@link start} and {@link restart}. Returns the team's wins after the change.
+	 */
+	adjustWins(teamOrNum: string | TeamNum, delta: number): number {
+		if (!Number.isInteger(delta)) throw new RangeError(`delta must be an integer, got ${delta}.`);
+		const team = this.teamOf(teamOrNum);
+		if (this.#status !== 'running' && this.#status !== 'finished') return this.#winsOf(team);
+		const manual = this.#manualWins.get(team) ?? 0;
+		const played = this.#winsOf(team) - manual;
+		const next = Math.max(-played, manual + delta);
+		if (next === manual) return this.#winsOf(team);
+		if (next === 0) this.#manualWins.delete(team);
+		else this.#manualWins.set(team, next);
+		this.#updateStatus();
+		this.#emitUpdate();
+		return this.#winsOf(team);
+	}
+
+	/** Sets the wins of a team by hand. Same as {@link adjustWins} with the difference. */
+	setWins(teamOrNum: string | TeamNum, wins: number): number {
+		const team = this.teamOf(teamOrNum);
+		return this.adjustWins(team, Math.max(0, Math.round(wins)) - this.#winsOf(team));
+	}
+
+	/** Wins of a team in the series (name or `TeamNum`, see {@link teamOf}), manual ones included. */
+	winsOf(team: string | TeamNum): number {
+		return this.#winsOf(this.teamOf(team));
+	}
+
+	#winsOf(team: string): number {
+		return this.#teams(this.#matches).find((entry) => entry.name === team)?.wins ?? 0;
+	}
+
+	/**
+	 * Removes the last recorded match, for example one that shouldn't count. A finished series goes on again
+	 * if it isn't over without it. Returns the removed match, or `undefined` when there was none.
+	 */
+	removeLastMatch(): MatchSummary | undefined {
+		const removed = this.#matches.pop();
+		if (!removed) return undefined;
+		this.#updateStatus();
+		this.#emitUpdate();
+		return removed;
+	}
+
+	/**
+	 * Called after anything stored changes: a series starts or stops, a match is recorded, aborted or removed,
+	 * wins are adjusted, a timeout starts or ends, or a snapshot is restored. Handy to save a {@link snapshot}.
+	 * Not called on every `UpdateState`: use {@link getLiveResult} for live totals.
+	 * Returns a function that removes the listener.
+	 */
+	onUpdate(listener: SeriesUpdateListener): Unsubscribe {
+		this.#updateListeners.add(listener);
+		return () => this.#updateListeners.delete(listener);
+	}
+
+	#emitUpdate(result?: SeriesResult): void {
+		if (this.#updateListeners.size === 0) return;
+		const current = result ?? this.getResult();
+		for (const listener of [...this.#updateListeners]) listener(current);
+	}
+
+	/** Everything the series stores, to bring it back with {@link restore}. Safe to `JSON.stringify`. */
+	snapshot(): SeriesSnapshot {
+		const index = this.#activeTimeout ? this.#timeouts.indexOf(this.#activeTimeout) : -1;
+		const snapshot: SeriesSnapshot = {
+			version: 1,
+			status: this.#status,
+			options: { ...this.#options },
+			stoppedByUser: this.#stoppedByUser,
+			matches: this.#matches,
+			abortedMatches: this.#abortedMatches,
+			timeouts: this.#timeouts,
+			activeTimeout: index >= 0 ? index : undefined,
+			manualWins: Object.fromEntries(this.#manualWins),
+		};
+		return reviveDates(snapshot);
+	}
+
+	/**
+	 * Brings back a series saved with {@link snapshot}, also after `JSON.parse` (dates are turned back into
+	 * dates). Replaces everything stored, without calling `onSeriesStart`. A running timeout goes on until its
+	 * `endsAt`, or ends right away (`'expired'`) if that time already passed. The match being played, if any,
+	 * keeps being tracked and is recorded when it ends. Calls {@link onUpdate}.
+	 * @throws {TypeError} when `snapshot` is not a series snapshot.
+	 */
+	restore(snapshot: SeriesSnapshot): void {
+		if (!snapshot || typeof snapshot !== 'object' || snapshot.version !== 1 || !Array.isArray(snapshot.matches)) {
+			throw new TypeError('Not a series snapshot (version 1).');
+		}
+		const data = reviveDates(snapshot);
+		this.#clearTimeoutTimer();
+		this.#options = normalizeOptions(data.options ?? {});
+		this.#status = (['idle', 'running', 'finished', 'stopped'] as const).includes(data.status) ? data.status : 'running';
+		this.#stoppedByUser = data.stoppedByUser === true;
+		this.#matches = [...data.matches];
+		this.#abortedMatches = [...(data.abortedMatches ?? [])];
+		this.#timeouts = [...(data.timeouts ?? [])];
+		this.#manualWins = new Map(
+			Object.entries(data.manualWins ?? {}).filter((entry): entry is [string, number] => Number.isInteger(entry[1]) && entry[1] !== 0),
+		);
+		const active = data.activeTimeout === undefined || data.activeTimeout === null ? undefined : this.#timeouts[data.activeTimeout];
+		this.#activeTimeout = active && !active.endedAt ? active : undefined;
+		if (this.#activeTimeout?.endsAt && this.#activeTimeout.endsAt.getTime() <= Date.now()) {
+			this.#finishTimeout('expired', this.#activeTimeout.endsAt);
+			return;
+		}
+		if (this.#activeTimeout) this.#armTimeoutTimer(this.#activeTimeout);
+		this.#emitUpdate();
+	}
+
+	#teams(
+		matches: readonly CountedMatch[],
+		timeouts: readonly SeriesTimeout[] = this.#timeouts,
+		manualWins: ReadonlyMap<string, number> = this.#manualWins,
+	): SeriesTeamResult[] {
 		interface TeamEntry {
 			result: SeriesTeamResult;
 			possession: number;
@@ -544,6 +754,7 @@ export class EsportsSeries {
 						secondsPlayed: 0,
 						timeoutsUsed: 0,
 						timeoutsLeft: 0,
+						manualWins: 0,
 					},
 					possession: 0,
 					decided: 0,
@@ -557,7 +768,7 @@ export class EsportsSeries {
 		for (const match of matches) {
 			for (const teamNum of [0, 1]) {
 				const side = teamSide(teamNum)!;
-				const entry = get(teamName(match.teams, teamNum));
+				const entry = get(nameIn(match, teamNum));
 				entry.result.matches++;
 				if (match.winnerTeamNum !== undefined) entry.decided++;
 				entry.result.goals += match.teams.find((team) => team.TeamNum === teamNum)?.Score ?? 0;
@@ -570,14 +781,20 @@ export class EsportsSeries {
 				entry.result.secondsPlayed += match.secondsPlayed;
 				entry.possession += match.possession.seconds[side];
 			}
-			if (match.winnerTeamNum !== undefined) get(teamName(match.teams, match.winnerTeamNum)).result.wins++;
+			if (match.winnerTeamNum !== undefined) get(nameIn(match, match.winnerTeamNum)).result.wins++;
 			possessionTotal += match.possession.seconds.blue + match.possession.seconds.orange;
+		}
+		for (const [name, wins] of manualWins) {
+			const { result } = get(name);
+			// Never below 0, whatever was removed by hand.
+			result.manualWins = Math.max(wins, -result.wins);
+			result.wins += result.manualWins;
 		}
 
 		return [...teams.values()]
 			.map(({ result, possession, decided, playerGoals }) => ({
 				...result,
-				winPercent: percentOf(result.wins, decided),
+				winPercent: percentOf(result.wins - result.manualWins, decided),
 				shootingPercent: percentOf(playerGoals, result.shots),
 				boostPerMinute: perMinute(result.boostUsed, result.secondsPlayed),
 				possessionPercent: percentOf(possession, possessionTotal),
@@ -687,7 +904,12 @@ export class EsportsSeries {
 	getLiveResult(): SeriesResult {
 		// Not matchInProgress: that one is already true in the lobby, which would count an empty match.
 		if (!this.tracker.matchStarted) return this.getResult();
-		const current: CountedMatch = { ...this.tracker.getStats(), teams: this.tracker.getTeams(), playerResults: this.tracker.getPlayerResults() };
+		const current: CountedMatch = {
+			...this.tracker.getStats(),
+			teams: this.tracker.getTeams(),
+			teamResults: this.tracker.getTeamResults(),
+			playerResults: this.tracker.getPlayerResults(),
+		};
 		if (this.#status === 'running') return this.#result(this.#matches, [...this.#matches, current]);
 		if (this.#status === 'finished' && this.#autoStart && !this.#stoppedByUser) return this.#result([], [current], 'running', true);
 		return this.getResult();
@@ -701,7 +923,7 @@ export class EsportsSeries {
 		nextSeries = false,
 	): SeriesResult {
 		const timeouts = nextSeries ? [] : this.#timeouts;
-		const teams = this.#teams(counted, timeouts);
+		const teams = this.#teams(counted, timeouts, nextSeries ? new Map() : this.#manualWins);
 		const active = nextSeries ? undefined : this.#activeTimeout;
 		const players = this.#players(counted);
 		const over = status === 'finished' || status === 'stopped';
@@ -720,6 +942,7 @@ export class EsportsSeries {
 			mvp,
 			timeouts: timeouts.map(copyTimeout),
 			activeTimeout: active && copyTimeout(active),
+			manualWins: nextSeries ? {} : Object.fromEntries(this.#manualWins),
 		};
 	}
 }
