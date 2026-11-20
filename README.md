@@ -219,7 +219,9 @@ series.onSeriesEnd((result) => console.log(`${result.winner} wins the series. MV
 series.getLiveResult(); // standings, also counting the match being played
 ```
 
-**Full reference: [docs/esports-series.md](docs/esports-series.md)**, including every method, how teams and players are identified, and which matches count.
+Fix the score by hand with `adjustWins()` / `removeLastMatch()`, give teams your own names with `identifyTeam`, and save a series across restarts with `snapshot()` / `restore()`.
+
+**Full reference: [docs/esports-series.md](docs/esports-series.md)**, including every method, how teams and players are identified, which matches count, manual wins and snapshots.
 
 ## Type guards
 

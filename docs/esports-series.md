@@ -12,6 +12,8 @@ Records series of matches in memory and gives you the results. By default it rec
 - [What the results include](#what-the-results-include)
 - [Which matches count](#which-matches-count)
 - [Timeouts](#timeouts)
+- [Fixing the score by hand](#fixing-the-score-by-hand)
+- [Saving and restoring a series](#saving-and-restoring-a-series)
 
 ## Usage
 
@@ -51,11 +53,19 @@ See also [examples/esports.ts](../examples/esports.ts).
 | `callTimeout(team)` / `endTimeout()` | Timeouts between matches. See [Timeouts](#timeouts). |
 | `abortedMatches` / `onMatchAbort` | Matches left before their end. See [Which matches count](#which-matches-count). |
 | `onSeriesStart` / `onMatchEnd` / `onSeriesEnd` | Listeners. `onSeriesStart` also fires on automatic restarts. Each returns an unsubscribe function. |
+| `adjustWins(team, delta)` / `setWins(team, wins)` / `winsOf(team)` / `removeLastMatch()` | Fix the score by hand. See [Fixing the score by hand](#fixing-the-score-by-hand). |
+| `snapshot()` / `restore(snapshot)` | Save and bring back the series. See [Saving and restoring a series](#saving-and-restoring-a-series). |
+| `onUpdate`             | Called after anything stored changes (start, stop, matches, manual wins, timeouts, restore). Not on every `UpdateState`. |
 | `dispose()`            | Stops listening to the client.                                                                 |
 
 ## How teams and players are identified
 
 - **Teams are identified by name** (`Game.Teams[].Name`), so they can switch sides between matches. Give them distinct names in the private match settings.
+- **Your own team names:** pass `identifyTeam` to name the teams yourself, for example with the teams of your broadcast when the names in the game are the default ones. It gets `{ TeamNum, Name }` and returns the name to use (an empty string keeps the default). Each finished match keeps the names it was played with, so switching sides later doesn't change the past matches:
+  ```ts
+  const sides = { 0: 'Karmine Corp', 1: 'Team Vitality' }; // updated by your control panel
+  new EsportsSeries(client, { identifyTeam: (team) => sides[team.TeamNum] ?? team.Name });
+  ```
 - **Players are identified by their `key`.** By default it comes from `playerKey()`:
   - **Real accounts:** the `PrimaryId` (e.g. `"Steam|7656119...|0"`). A player who changes their name stays one player, and `names` lists every name they used. Splitscreen players get different ids, so they stay apart.
   - **Bots:** they all share `"Unknown|0|0"`, so their key is `"bot:" + name`. Results have `bot: true` for them.
@@ -109,3 +119,34 @@ series.endTimeout();         // the team is ready: ends the timeout early
 - **How it ends** (`endReason`): `'ended'` with `endTimeout()`, `'expired'` when `timeoutSeconds` run out, `'match-started'` when the next match starts with `MatchInitialized` (always, even with time left), or `'cancelled'` when the series is started again, stopped or disposed. With `timeoutSeconds: 0` there is no time limit.
 - **In the results:** `result.timeouts` lists every timeout of the series (`team`, `afterMatch`, `startedAt`, `endsAt`, `endedAt`, `endReason`), `result.activeTimeout` the running one, and each team has `timeoutsUsed` and `timeoutsLeft`. A timeout that ran out before its time still counts as used.
 - The timeout doesn't pause anything in the game: it's for your bot or overlay to show and enforce.
+
+## Fixing the score by hand
+
+For a match played outside the game's view, a forfeit, or a wrong result:
+
+```ts
+series.adjustWins('Karmine Corp', 1);  // one more win (also by TeamNum, see teamOf)
+series.adjustWins(1, -1);              // one less for the team that played orange in the last match
+series.setWins('Team Vitality', 2);    // exactly 2 wins
+series.winsOf('Team Vitality');        // 2, manual wins included
+series.removeLastMatch();              // the last recorded match doesn't count anymore
+```
+
+- Wins never go below `0`. Only while the series is `running` or `finished`. `start()` and `restart()` clear them.
+- The series ends (`onSeriesEnd`) or goes on again with the new score. In `play-all`, each manual win also counts as a match played.
+- Results show them in `manualWins` (per team, already counted in `wins`, and for the whole series). `winPercent` only looks at the matches played.
+
+## Saving and restoring a series
+
+`snapshot()` returns everything the series stores: options, status, matches, aborted matches, timeouts and manual wins. It can go through `JSON.stringify`, and `restore()` turns the dates back into dates:
+
+```ts
+series.onUpdate(() => fs.writeFileSync('series.json', JSON.stringify(series.snapshot())));
+
+const restored = new EsportsSeries(client, { autoStart: false });
+restored.restore(JSON.parse(fs.readFileSync('series.json', 'utf8')));
+```
+
+- `restore()` replaces everything stored and calls `onUpdate`, not `onSeriesStart`.
+- A running timeout goes on until its `endsAt`, or ends right away (`'expired'`) if that time already passed.
+- The match being played is not in the snapshot: after a restart the tracker picks it up from the next `UpdateState` and records it when it ends, with the stats from then on.
