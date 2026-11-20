@@ -12,6 +12,8 @@ Records series of matches in memory and gives you the results. By default it rec
 - [What the results include](#what-the-results-include)
 - [Which matches count](#which-matches-count)
 - [Timeouts](#timeouts)
+- [Changing the options](#changing-the-options)
+- [Pausing a series](#pausing-a-series)
 - [Fixing the score by hand](#fixing-the-score-by-hand)
 - [Saving and restoring a series](#saving-and-restoring-a-series)
 
@@ -49,7 +51,9 @@ See also [examples/esports.ts](../examples/esports.ts).
 | `stop()`               | Stops recording, and the automatic restart until the next `start()` or `restart()`. The matches played so far stay in `getResult()`. |
 | `getResult()`          | `{ status, finished, matches, abortedMatches, teams, winner, players, mvp, timeouts, activeTimeout }`, with the finished matches.      |
 | `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. After a series finished with `autoStart`, it already shows the new series during its first match. Cheap enough for every `UpdateState`. |
-| `status`               | `'idle'`, `'running'`, `'finished'` or `'stopped'`.                                           |
+| `status`               | `'idle'`, `'running'`, `'paused'`, `'finished'` or `'stopped'`.                               |
+| `options` / `setOptions(options)` / `setGames()` / `setTimeouts()` / `setTimeoutSeconds()` | Read or change the options without starting again. See [Changing the options](#changing-the-options). |
+| `pause()` / `resume()` / `paused` | Stop recording for a while. See [Pausing a series](#pausing-a-series). |
 | `callTimeout(team)` / `endTimeout()` | Timeouts between matches. See [Timeouts](#timeouts). |
 | `abortedMatches` / `onMatchAbort` | Matches left before their end. See [Which matches count](#which-matches-count). |
 | `onSeriesStart` / `onMatchEnd` / `onSeriesEnd` | Listeners. `onSeriesStart` also fires on automatic restarts. Each returns an unsubscribe function. |
@@ -119,6 +123,34 @@ series.endTimeout();         // the team is ready: ends the timeout early
 - **How it ends** (`endReason`): `'ended'` with `endTimeout()`, `'expired'` when `timeoutSeconds` run out, `'match-started'` when the next match starts with `MatchInitialized` (always, even with time left), or `'cancelled'` when the series is started again, stopped or disposed. With `timeoutSeconds: 0` there is no time limit.
 - **In the results:** `result.timeouts` lists every timeout of the series (`team`, `afterMatch`, `startedAt`, `endsAt`, `endedAt`, `endReason`), `result.activeTimeout` the running one, and each team has `timeoutsUsed` and `timeoutsLeft`. A timeout that ran out before its time still counts as used.
 - The timeout doesn't pause anything in the game: it's for your bot or overlay to show and enforce.
+
+## Changing the options
+
+`start()` clears the series. To change the format or the timeouts of the series being played, keeping its matches:
+
+```ts
+series.setOptions({ games: 7 });            // best of 5 → best of 7: the series goes on
+series.setGames(3, 'play-all');             // also the format
+series.setTimeouts(1, 300);                 // one 5-minute timeout per team
+series.setTimeoutSeconds(0);                // no time limit
+series.options;                             // { games: 3, format: 'play-all', timeouts: 1, timeoutSeconds: 0 }
+```
+
+- Only the fields given change. Invalid values throw a `RangeError` like in the constructor, and nothing changes.
+- The series ends (`onSeriesEnd`) or goes on again with the new options.
+- A team that used more timeouts than the new limit has `0` left. A running timeout gets the new length from when it started, and ends right away (`'expired'`) if that time already passed.
+- `onUpdate` is called.
+
+## Pausing a series
+
+```ts
+series.pause();   // status 'paused': matches that end now are not recorded
+series.resume();  // records again
+```
+
+- For a showmatch, a test or a rematch between two matches of the series. Matches that end or are left while paused are ignored, and no timeout can be called (`'not-running'`).
+- The results, the manual wins and a running timeout stay. `adjustWins()` and `setOptions()` still work, and the series can end when it resumes.
+- `pause()` only works while `running`, `resume()` only while `paused`. Both return `true` when they did something. `stop()` also stops a paused series.
 
 ## Fixing the score by hand
 
