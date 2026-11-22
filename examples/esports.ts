@@ -1,6 +1,6 @@
 /**
  * Records series of matches (best of 5 by default) and prints the stats of each match and of each player.
- * Recording starts by itself, and a new series starts by itself after one ends.
+ * Recording starts by itself, and after a series ends a new one starts by itself with the next match.
  *
  * Run with:
  *   npx tsx examples/esports.ts                 best of 5

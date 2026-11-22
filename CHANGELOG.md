@@ -5,6 +5,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `tracker.phase` (`'none'`, `'lobby'`, `'playing'`, `'paused'`, `'replay'` or `'ended'`): what is on screen, also telling an end screen from a replay. Also `tracker.setPaused()` and `tracker.watchingReplay` ([#21]).
+- Team results of matches and series include the totals of their players: `score`, `assists`, `saves`, `demos`, `touches`, `carTouches` and `airTime`. Over a series they are summed match by match, so a player who changed team counts for each team. Restored snapshots get them too ([#21]).
+- `SeriesResult.matchesDecided` and `SeriesResult.currentMatch`: the number of matches decided and the match to show, wins by hand counted ([#21]).
+- `series.renameTeams(renames)` and `renameSnapshotTeams(snapshot, renames)`: rename teams in everything recorded, all at once ([#21]).
+- `series.snapshot({ timeline: false })`: a much smaller snapshot ([#21]).
+- `series.teamResult(team, result?)`: a team's results by name or side, zeros if it didn't play ([#21]).
+- `serializeEvent(event)`: an event as the game sends it, the inverse of `parseEventMessage` ([#21]).
+- `mirror` option of `EsportsSeries`: a copy of a series kept elsewhere, fed with snapshots, that doesn't count its matches twice ([#21]).
+- `EventRelay`: an event source that outlives the clients ([#21]).
+
+### Changed
+
+- `MatchTeamResult`, `SeriesTeamResult` and `SeriesResult` have new required fields: code that builds these objects by itself (test mocks, for example) has to add them ([#21]).
+- With `autoStart`, the series after a finished one starts when the next match starts, instead of when it ends: during that match `getResult()`, `status` and the snapshots are already the new series at 0-0, and `onSeriesStart` / `onUpdate` are called then. A first match left before its end is kept in the `abortedMatches` of the new series. To keep the finished result longer, save it in `onSeriesEnd`, call `stop()` or use `autoStart: false` ([#21]).
+
+### Fixed
+
+- Joining on the end screen of a match (`bHasWinner`), for example after restarting the app, is no longer taken for a match being played: `matchEnded` is `true` there. Neither is joining in a lobby (5:00 and 0-0): that match starts with `MatchInitialized`, `RoundStarted` or the clock moving ([#21]).
+- A match whose start (or the end of the one before) was missed, for example while reconnecting, is tracked from zero instead of being ignored or mixed with the one before. It is recognized by another `MatchGuid`, or by the clock going back up without more goals, as matches played one after another in a lobby have the same `MatchGuid`. When the end was missed, what was played goes to `abortedMatches` ([#21]).
+- Wins by hand are counted net to end a series: correcting a result with `-1` / `+1` no longer ends a best of 3 at 1-1 ([#21]).
+- A replay opened from the match history (`ReplayCreated`) doesn't start the next series ([#21]).
+
 ## [1.4.0] - 2026-11-20
 
 ### Added
@@ -146,3 +170,4 @@ First stable release, published as `@juande_pl/rocketleague-stats-api-client`.
 [#16]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/16
 [#18]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/18
 [#19]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/19
+[#21]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/21

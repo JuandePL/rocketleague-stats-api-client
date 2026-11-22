@@ -2,7 +2,7 @@
 
 [← Docs index](README.md) · [README](../README.md)
 
-Records series of matches in memory and gives you the results. By default it records on its own: the series starts right away, and a new one starts after each series ends. Each match is tracked with a [`MatchTracker`](match-stats.md#matchtracker), available as `series.tracker`.
+Records series of matches in memory and gives you the results. By default it records on its own: the series starts right away, and after each series ends a new one starts with the next match. Each match is tracked with a [`MatchTracker`](match-stats.md#matchtracker), available as `series.tracker`.
 
 ## Contents
 
@@ -15,7 +15,9 @@ Records series of matches in memory and gives you the results. By default it rec
 - [Changing the options](#changing-the-options)
 - [Pausing a series](#pausing-a-series)
 - [Fixing the score by hand](#fixing-the-score-by-hand)
+- [Renaming teams](#renaming-teams)
 - [Saving and restoring a series](#saving-and-restoring-a-series)
+- [Reconnecting with a new client](#reconnecting-with-a-new-client)
 
 ## Usage
 
@@ -50,7 +52,7 @@ See also [examples/esports.ts](../examples/esports.ts).
 | `restart()`            | Starts again with the same options. Clears the stored matches.                                |
 | `stop()`               | Stops recording, and the automatic restart until the next `start()` or `restart()`. The matches played so far stay in `getResult()`. |
 | `getResult()`          | `{ status, finished, matches, abortedMatches, teams, winner, players, mvp, timeouts, activeTimeout }`, with the finished matches.      |
-| `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. After a series finished with `autoStart`, it already shows the new series during its first match. Cheap enough for every `UpdateState`. |
+| `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. With `autoStart`, if the series finished during the match (changed by hand or restored), it already shows the next series. Cheap enough for every `UpdateState`. |
 | `status`               | `'idle'`, `'running'`, `'paused'`, `'finished'` or `'stopped'`.                               |
 | `options` / `setOptions(options)` / `setGames()` / `setTimeouts()` / `setTimeoutSeconds()` | Read or change the options without starting again. See [Changing the options](#changing-the-options). |
 | `pause()` / `resume()` / `paused` | Stop recording for a while. See [Pausing a series](#pausing-a-series). |
@@ -58,7 +60,9 @@ See also [examples/esports.ts](../examples/esports.ts).
 | `abortedMatches` / `onMatchAbort` | Matches left before their end. See [Which matches count](#which-matches-count). |
 | `onSeriesStart` / `onMatchEnd` / `onSeriesEnd` | Listeners. `onSeriesStart` also fires on automatic restarts. Each returns an unsubscribe function. |
 | `adjustWins(team, delta)` / `setWins(team, wins)` / `winsOf(team)` / `removeLastMatch()` | Fix the score by hand. See [Fixing the score by hand](#fixing-the-score-by-hand). |
-| `snapshot()` / `restore(snapshot)` | Save and bring back the series. See [Saving and restoring a series](#saving-and-restoring-a-series). |
+| `teamResult(team, result?)` | A team's results by name or `TeamNum`, also before it played (zeros, and every timeout left to show). Pass `getLiveResult()` as `result` for live ones. |
+| `renameTeams(renames)` | Renames teams in everything recorded. See [Renaming teams](#renaming-teams). |
+| `snapshot({ timeline })` / `restore(snapshot)` | Save and bring back the series. See [Saving and restoring a series](#saving-and-restoring-a-series). |
 | `onUpdate`             | Called after anything stored changes (start, stop, matches, manual wins, timeouts, restore). Not on every `UpdateState`. |
 | `dispose()`            | Stops listening to the client.                                                                 |
 
@@ -83,6 +87,8 @@ See also [examples/esports.ts](../examples/esports.ts).
 - **Per-team results** include matches played, wins and `winPercent`, goals, shots and `shootingPercent`, boost used and `boostPerMinute`, play time (`secondsPlayed`) and possession over the whole series.
 - **Per-player results** (`result.players`) include the `PrimaryId`, the summed scoreboard stats, boost used, air time, wall time, average speed (weighted by `drivingTime`), crossbar hits (attack and defense), matches played, matches left early (`leftEarly`), joins and leaves summed over the matches, and the number of MVPs. Also wins and `winPercent`, `shootingPercent`, `goalParticipation` (over `teamGoals`, the goals of their team in each match they played), `secondsPlayed` and `boostPerMinute`.
 - **Rates over the series** are computed from the totals, not averaged per match: `shootingPercent` is all goals over all shots, and `boostPerMinute` all boost over all play time. See [Rates and percentages](match-stats.md#rates-and-percentages).
+- **Team totals of players:** `score` (player points, not goals), `assists`, `saves`, `demos`, `touches`, `carTouches` and `airTime`, summed match by match. Don't sum `result.players` by their `team` for this: that is only the team of their last match.
+- **`matchesDecided`** is the matches with a winner, with the wins by hand. **`currentMatch`** is the number to show: the match being played, the one just over while `tracker.phase` is `'ended'`, else the next one (the last one once the series is over). It changes with `tracker.phase`, which doesn't call `onUpdate`.
 - **`winPercent`** counts only finished matches. In `getLiveResult()`, the match being played adds to `matches` but not to `winPercent`.
 - **Per-match player results:** each match in `result.matches` keeps its own `playerResults` (see [Match summary](match-stats.md#match-summary)).
 
@@ -90,7 +96,11 @@ See also [examples/esports.ts](../examples/esports.ts).
 
 - Only matches that end (`MatchEnded`) while the series is running are recorded.
 - **Matches left before their end:** if the lobby is destroyed (`MatchDestroyed`) before `MatchEnded`, for example because everyone left, the match is kept apart in `abortedMatches` with the stats until then, and `onMatchAbort` is called. It doesn't count for anything else: not for wins, team and player totals, nor the end of the series. So the match can be played again. A match left before anything was played (in the lobby, or during the first kickoff countdown after `MatchInitialized`) is just dropped.
-- **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match ends. That match then becomes the first of the new series.
+- **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match **starts** (`MatchInitialized`, not the lobby after `MatchCreated`). The new series starts then, at 0-0, with that match as its first: `onSeriesStart` and `onUpdate` are called, and `tracker.onMatchStart` listeners already see the new series.
+  - When joining a match midway, it starts with the first `UpdateState`. Joining on the end screen of a match (`bHasWinner`) or in a lobby (5:00 and 0-0) starts nothing, so a restored result stays. Neither does a replay opened from the match history (`ReplayCreated`).
+  - If the start of a match was missed, it is recognized by another `MatchGuid` or by the clock going back up without more goals (matches played one after another in a lobby have the same `MatchGuid`).
+  - If the start of the match wasn't seen, or the series finished during the match (wins or options changed by hand), the new series starts when that match ends.
+  - To reopen a finished series (a Bo3 that was really a Bo5, a wrong win), use `setOptions()`, `adjustWins()` or `removeLastMatch()` **before the next match starts**. To keep a result longer, save it in `onSeriesEnd`, call `stop()`, or use `autoStart: false`.
 
 ## Timeouts
 
@@ -164,9 +174,22 @@ series.winsOf('Team Vitality');        // 2, manual wins included
 series.removeLastMatch();              // the last recorded match doesn't count anymore
 ```
 
+- Wins by hand are counted net: `-1` for a team and `+1` for the other corrects a result without adding a match.
 - Wins never go below `0`. Only while the series is `running` or `finished`. `start()` and `restart()` clear them.
 - The series ends (`onSeriesEnd`) or goes on again with the new score. In `play-all`, each manual win also counts as a match played.
 - Results show them in `manualWins` (per team, already counted in `wins`, and for the whole series). `winPercent` only looks at the matches played.
+
+## Renaming teams
+
+Teams are identified by name, so renaming one is renaming it in everything recorded:
+
+```ts
+series.renameTeams({ 'Team 1': 'Karmine Corp' });
+series.renameTeams({ A: 'B', B: 'A' });                // all at once: they exchange names
+const copy = renameSnapshotTeams(series.snapshot(), { A: 'Alpha' }); // only a copy, to show other names
+```
+
+Wins, results, players and timeouts go with the names, and two teams renamed to the same name become one. The match being played gets its names from `identifyTeam`.
 
 ## Saving and restoring a series
 
@@ -179,6 +202,30 @@ const restored = new EsportsSeries(client, { autoStart: false });
 restored.restore(JSON.parse(fs.readFileSync('series.json', 'utf8')));
 ```
 
+- `snapshot({ timeline: false })` leaves out the timeline of each match (every event of it): much smaller, to save or send it often. The results don't need it.
 - `restore()` replaces everything stored and calls `onUpdate`, not `onSeriesStart`.
 - A running timeout goes on until its `endsAt`, or ends right away (`'expired'`) if that time already passed.
 - The match being played is not in the snapshot: after a restart the tracker picks it up from the next `UpdateState` and records it when it ends, with the stats from then on.
+
+## Reconnecting with a new client
+
+To change the client (another host or port) without losing the series, give it an `EventRelay`:
+
+```ts
+const relay = new EventRelay();
+const series = new EsportsSeries(relay);
+let stop = relay.forward(client);
+
+// Later, with another client:
+stop();
+stop = relay.forward(otherClient);
+```
+
+## A copy of a series kept elsewhere
+
+When another app owns the series and sends you its snapshots, use `mirror`. It follows the match being played for the live results, but only `restore()` changes what is recorded:
+
+```ts
+const copy = new EsportsSeries(client, { mirror: true });
+onSnapshotReceived((snapshot) => copy.restore(snapshot));
+```
