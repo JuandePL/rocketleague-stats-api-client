@@ -31,8 +31,8 @@ export interface SeriesOptions {
 
 export interface EsportsSeriesOptions extends Partial<SeriesOptions>, MatchTrackerOptions {
 	/**
-	 * Record without calling {@link EsportsSeries.start}: the series starts right away, and a new one
-	 * starts by itself with the same options when a match ends after the previous series finished.
+	 * Record without calling {@link EsportsSeries.start}: the series starts right away, and after it finishes
+	 * a new one starts by itself with the same options when the next match starts (`tracker.onMatchStart`).
 	 * {@link EsportsSeries.stop} turns it off until the next `start()` or `restart()`.
 	 * @default true
 	 */
@@ -331,7 +331,11 @@ export class EsportsSeries {
 		this.#autoStart = options.autoStart ?? true;
 		this.tracker = new MatchTracker(source, { identifyPlayer: options.identifyPlayer, identifyTeam: options.identifyTeam });
 		this.#unsubscribe = this.tracker.onMatchEnd((summary) => this.#record(summary));
-		this.#unsubscribeStart = this.tracker.onMatchStart(() => this.#finishTimeout('match-started'));
+		this.#unsubscribeStart = this.tracker.onMatchStart(() => {
+			this.#finishTimeout('match-started');
+			// The finished series can be read until here. Subscribed first, so other listeners see the new series.
+			this.#startNextSeries();
+		});
 		this.#unsubscribeAbort = this.tracker.onMatchAbort((summary) => this.#recordAbort(summary));
 		if (this.#autoStart) this.start(this.#options);
 	}
@@ -632,7 +636,7 @@ export class EsportsSeries {
 	}
 
 	#recordAbort(summary: AbortedMatchSummary): void {
-		// A match left after a finished series would have been the first of the next one: nothing to keep.
+		// Finished while this match was played (wins or options changed by hand), or not recording: nothing to keep.
 		if (this.#status !== 'running') return;
 		this.#abortedMatches.push(summary);
 		const result = this.getResult();
@@ -647,8 +651,8 @@ export class EsportsSeries {
 	}
 
 	#record(summary: MatchSummary): void {
-		// The previous series is kept until the next match ends, so its result can still be read.
-		if (this.#status === 'finished' && this.#autoStart && !this.#stoppedByUser) this.start(this.#options);
+		// Normally done when the match started. Not if its start wasn't seen, or the series finished meanwhile.
+		this.#startNextSeries();
 		if (this.#status !== 'running') return;
 		this.#matches.push(summary);
 		if (this.#isOver()) this.#status = 'finished';
@@ -657,6 +661,11 @@ export class EsportsSeries {
 		for (const listener of [...this.#matchListeners]) listener(summary, result);
 		if (this.#status === 'finished') for (const listener of [...this.#endListeners]) listener(result);
 		this.#emitUpdate(result);
+	}
+
+	/** With `autoStart`, starts the series after a finished one, unless it was stopped. */
+	#startNextSeries(): void {
+		if (this.#status === 'finished' && this.#autoStart && !this.#stoppedByUser) this.start(this.#options);
 	}
 
 	#isOver(): boolean {
@@ -971,9 +980,9 @@ export class EsportsSeries {
 	 *
 	 * - The current match adds goals, boost, possession and player stats, but no win until it ends.
 	 * - `matches` still holds only the finished matches. The current match is in `tracker`.
-	 * - After a series finished with `autoStart`, a match being played is the first of the next series: the
-	 *   live result is then that new series (`status: 'running'`, no finished matches yet), while `getResult()`
-	 *   keeps the finished one until that match ends.
+	 * - After a series finished with `autoStart`, the next series starts with the next match, for `getResult()`
+	 *   too. If a series finishes during a match (wins or options changed by hand, a snapshot restored), the
+	 *   live result is already the next series, while `getResult()` keeps the finished one until that match ends.
 	 * - With no match being played (the lobby before `MatchInitialized` included, see `tracker.matchStarted`), or when
 	 *   the series is `idle` or `stopped`, it is the same as `getResult()`.
 	 */

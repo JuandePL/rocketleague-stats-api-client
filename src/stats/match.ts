@@ -429,7 +429,8 @@ export class MatchTracker {
 	 * it is `false` in the lobby after `MatchCreated`, before the match starts.
 	 *
 	 * If the tracker joins mid-match (no `MatchCreated` or `MatchInitialized` seen), it is `true` from the first
-	 * `UpdateState`. If only `MatchInitialized` was missed, it is `true` from the first `RoundStarted`.
+	 * `UpdateState`, unless that match already has a winner (`bHasWinner`: the tracker joined on its end screen).
+	 * If only `MatchInitialized` was missed, it is `true` from the first `RoundStarted`.
 	 */
 	get matchStarted(): boolean {
 		return this.#started && !this.#ended;
@@ -497,7 +498,8 @@ export class MatchTracker {
 
 	/**
 	 * Called when a match starts: on `MatchInitialized`, not while the players are still in the lobby after
-	 * `MatchCreated`. When joining mid-match, on the first `UpdateState` (see {@link matchStarted}).
+	 * `MatchCreated`. When joining mid-match, on the first `UpdateState` (see {@link matchStarted}), also after
+	 * a match that ended, when the `MatchGuid` shows that it is another one.
 	 * Returns a function that removes the listener.
 	 */
 	onMatchStart(listener: MatchStartListener): Unsubscribe {
@@ -609,9 +611,12 @@ export class MatchTracker {
 					this.#crossbarHit(event.Data.BallLastTouch.Player, event.Data.BallLocation.Y);
 				}
 				break;
-			case 'UpdateState':
-				if (!this.#ended) this.#tick(event.Data.Game, event.Data.Players, event.Data.MatchGuid);
+			case 'UpdateState': {
+				const { Game, Players, MatchGuid } = event.Data;
+				if (this.#ended && this.#isAnotherMatch(Game, MatchGuid)) this.reset();
+				if (!this.#ended) this.#tick(Game, Players, MatchGuid);
 				break;
+			}
 			case 'MatchEnded':
 				if (!this.#ended) this.#end(event.Data.WinnerTeamNum);
 				break;
@@ -629,6 +634,14 @@ export class MatchTracker {
 		}
 
 		if (startsMatch) this.#record(event);
+	}
+
+	/**
+	 * After the end, an `UpdateState` of another match being played: its `MatchCreated` and `MatchInitialized`
+	 * were missed, for example while reconnecting. The end screen and replays are not.
+	 */
+	#isAnotherMatch(game: Game, matchGuid: string | undefined): boolean {
+		return !game.bHasWinner && !game.bReplay && !!matchGuid && !!this.#matchGuid && matchGuid !== this.#matchGuid;
 	}
 
 	#record(event: StatsApiEvent): void {
@@ -688,8 +701,9 @@ export class MatchTracker {
 	}
 
 	#tick(game: Game, players: Player[], matchGuid: string | undefined): void {
-		// Without MatchCreated first, this is not a lobby: the tracker joined a match already being played.
-		if (!this.#inLobby) this.#begin();
+		// Without MatchCreated first, this is not a lobby: the tracker joined a match already being played,
+		// unless it has a winner, like on the end screen.
+		if (!this.#inLobby && !game.bHasWinner) this.#begin();
 		this.#lastGame = game;
 		this.#lastPlayers = players;
 		this.#matchGuid = matchGuid ?? this.#matchGuid;

@@ -2,7 +2,7 @@
 
 [← Docs index](README.md) · [README](../README.md)
 
-Records series of matches in memory and gives you the results. By default it records on its own: the series starts right away, and a new one starts after each series ends. Each match is tracked with a [`MatchTracker`](match-stats.md#matchtracker), available as `series.tracker`.
+Records series of matches in memory and gives you the results. By default it records on its own: the series starts right away, and after each series ends a new one starts with the next match. Each match is tracked with a [`MatchTracker`](match-stats.md#matchtracker), available as `series.tracker`.
 
 ## Contents
 
@@ -50,7 +50,7 @@ See also [examples/esports.ts](../examples/esports.ts).
 | `restart()`            | Starts again with the same options. Clears the stored matches.                                |
 | `stop()`               | Stops recording, and the automatic restart until the next `start()` or `restart()`. The matches played so far stay in `getResult()`. |
 | `getResult()`          | `{ status, finished, matches, abortedMatches, teams, winner, players, mvp, timeouts, activeTimeout }`, with the finished matches.      |
-| `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. After a series finished with `autoStart`, it already shows the new series during its first match. Cheap enough for every `UpdateState`. |
+| `getLiveResult()`      | Like `getResult()`, but team and player totals also include the match being played (no win until it ends). `matches` stays the finished ones. With `autoStart`, if the series finished during the match (changed by hand or restored), it already shows the next series. Cheap enough for every `UpdateState`. |
 | `status`               | `'idle'`, `'running'`, `'paused'`, `'finished'` or `'stopped'`.                               |
 | `options` / `setOptions(options)` / `setGames()` / `setTimeouts()` / `setTimeoutSeconds()` | Read or change the options without starting again. See [Changing the options](#changing-the-options). |
 | `pause()` / `resume()` / `paused` | Stop recording for a while. See [Pausing a series](#pausing-a-series). |
@@ -90,7 +90,10 @@ See also [examples/esports.ts](../examples/esports.ts).
 
 - Only matches that end (`MatchEnded`) while the series is running are recorded.
 - **Matches left before their end:** if the lobby is destroyed (`MatchDestroyed`) before `MatchEnded`, for example because everyone left, the match is kept apart in `abortedMatches` with the stats until then, and `onMatchAbort` is called. It doesn't count for anything else: not for wins, team and player totals, nor the end of the series. So the match can be played again. A match left before anything was played (in the lobby, or during the first kickoff countdown after `MatchInitialized`) is just dropped.
-- **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match ends. That match then becomes the first of the new series.
+- **Automatic restart:** when a series finishes, its result stays in `getResult()` until the next match **starts** (`MatchInitialized`, not the lobby after `MatchCreated`). The new series starts then, at 0-0, with that match as its first: `onSeriesStart` and `onUpdate` are called, and `tracker.onMatchStart` listeners already see the new series.
+  - When joining a match midway, it starts with the first `UpdateState`. Joining on the end screen of a match (`bHasWinner`) starts nothing, so a restored result stays.
+  - If the start of the match wasn't seen, or the series finished during the match (wins or options changed by hand), the new series starts when that match ends.
+  - To reopen a finished series (a Bo3 that was really a Bo5, a wrong win), use `setOptions()`, `adjustWins()` or `removeLastMatch()` **before the next match starts**. To keep a result longer, save it in `onSeriesEnd`, call `stop()`, or use `autoStart: false`.
 
 ## Timeouts
 

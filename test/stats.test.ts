@@ -27,7 +27,8 @@ import {
 import { fixtures } from './fixtures.js';
 
 const basePlayer = fixtures.UpdateState.Players[0] as Player;
-const baseGame = fixtures.UpdateState.Game as Game;
+// The fixture is of a match that is over: these are being played.
+const baseGame = { ...fixtures.UpdateState.Game, bHasWinner: false, Winner: '' } as Game;
 
 function player(Name: string, TeamNum: 0 | 1, extra: Partial<Player> = {}): Player {
 	return { ...basePlayer, Name, TeamNum, PrimaryId: `Steam|${Name}|0`, Shortcut: 1, Boost: undefined, bDemolished: false, ...extra };
@@ -663,9 +664,8 @@ describe('MatchTracker', () => {
 			expect(live).toMatchObject({ status: 'running', finished: false, winner: undefined, matches: [] });
 			expect(live.players.find((p) => p.Name === 'Ana')).toMatchObject({ Goals: 1, matches: 1 });
 			expect(live.teams.find((t) => t.name === 'Blue')).toMatchObject({ wins: 0, goals: 1 });
-			// The finished series is still readable until this match ends.
-			expect(series.getResult()).toMatchObject({ status: 'finished', winner: 'Blue' });
-			expect(series.getResult().players.find((p) => p.Name === 'Ana')?.Goals).toBe(3);
+			// The new series started with the match.
+			expect(series.getResult()).toMatchObject({ status: 'running', winner: undefined, matches: [], players: [] });
 		});
 
 		it('keeps the finished series after stop()', () => {
@@ -1229,6 +1229,148 @@ describe('EsportsSeries', () => {
 			playMatch(0, [1, 0]);
 			expect(onEnd).toHaveBeenCalledTimes(2);
 			expect(onEnd.mock.calls[1]![0]).toMatchObject({ winner: 'Blue' });
+		});
+
+		describe('after a finished series', () => {
+			/** A finished best of 3 (Blue 2 - 0), left on its end screen. */
+			function finished(options: EsportsSeriesOptions = {}) {
+				const context = setup({ games: 3, ...options });
+				context.playMatch(0, [1, 0]);
+				context.playMatch(0, [2, 0]);
+				return context;
+			}
+			const update = (MatchGuid: string | undefined, game: Partial<Game> = {}) =>
+				ev('UpdateState', { MatchGuid, Players: [], Game: { ...baseGame, bHasWinner: false, bReplay: false, ...game } });
+
+			it('starts the next series when the next match starts, not when it ends', () => {
+				const { series, match } = finished();
+				const onStart = vi.fn();
+				series.onSeriesStart(onStart);
+
+				// The lobby of the next match still shows the finished series.
+				match.send(ev('MatchDestroyed'));
+				match.send(ev('MatchCreated'));
+				match.tick();
+				expect(series.getResult()).toMatchObject({ status: 'finished', winner: 'Blue' });
+				expect(onStart).not.toHaveBeenCalled();
+
+				match.send(ev('MatchInitialized'));
+				expect(onStart).toHaveBeenCalledOnce();
+				expect(series.getResult()).toMatchObject({ status: 'running', matches: [], winner: undefined, manualWins: {} });
+
+				match.send(ev('RoundStarted'));
+				match.play(5);
+				match.end(1, [0, 1]);
+				expect(onStart).toHaveBeenCalledOnce();
+				expect(series.matches).toHaveLength(1);
+			});
+
+			it('has started when tracker.onMatchStart listeners are called', () => {
+				const { series, match } = finished();
+				let status: string | undefined;
+				series.tracker.onMatchStart(() => (status = series.status));
+				match.send(ev('MatchInitialized'));
+				expect(status).toBe('running');
+			});
+
+			it('emits an update when it starts', () => {
+				const { series, match } = finished();
+				const onUpdate = vi.fn();
+				series.onUpdate(onUpdate);
+				match.send(ev('MatchInitialized'));
+				expect(onUpdate.mock.calls[0]![0]).toMatchObject({ status: 'running', matches: [] });
+			});
+
+			it('starts from RoundStarted when MatchInitialized was missed', () => {
+				const { series, match } = finished();
+				match.send(ev('MatchCreated'));
+				match.send(ev('RoundStarted'));
+				expect(series.status).toBe('running');
+				expect(series.matches).toHaveLength(0);
+			});
+
+			it('keeps the wins given by hand to the new series during its first match', () => {
+				const { series, match } = finished();
+				match.start();
+				series.adjustWins('Orange', 1);
+				match.play(3);
+				match.end(0, [1, 0]);
+				expect(series.winsOf('Orange')).toBe(1);
+				expect(series.winsOf('Blue')).toBe(1);
+			});
+
+			it('keeps a first match left before its end in the new series', () => {
+				const { series, match } = finished();
+				match.start();
+				match.play(5);
+				match.send(ev('MatchDestroyed'));
+				expect(series.getResult()).toMatchObject({ status: 'running', matches: [] });
+				expect(series.abortedMatches).toHaveLength(1);
+			});
+
+			it('keeps the finished series after stop()', () => {
+				const { series, match } = finished();
+				series.stop();
+				match.start();
+				expect(series.getResult()).toMatchObject({ status: 'finished', winner: 'Blue' });
+			});
+
+			it('keeps the finished series without autoStart', () => {
+				const { series, match } = setup({ autoStart: false });
+				series.start({ games: 1 });
+				match.start();
+				match.play(2);
+				match.end(0, [1, 0]);
+				match.start();
+				expect(series.status).toBe('finished');
+			});
+
+			it('keeps a restored series when joining the end screen of its last match', () => {
+				const restored = setup();
+				restored.series.restore(finished().series.snapshot());
+				for (const bReplay of [false, true, true]) restored.series.tracker.handle(update('last', { bHasWinner: true, bReplay, TimeSeconds: 0 }));
+				expect(restored.series.tracker.matchStarted).toBe(false);
+				expect(restored.series.getResult()).toMatchObject({ status: 'finished', winner: 'Blue' });
+				expect(restored.series.getLiveResult().status).toBe('finished');
+			});
+
+			it('starts when a restored series joins the next match midway', () => {
+				const restored = setup();
+				restored.series.restore(finished().series.snapshot());
+				restored.series.tracker.handle(update('next', { TimeSeconds: 120 }));
+				expect(restored.series.status).toBe('running');
+				expect(restored.series.matches).toHaveLength(0);
+			});
+
+			it('still records a match whose start was never seen', () => {
+				const restored = setup();
+				restored.series.restore(finished().series.snapshot());
+				restored.series.tracker.handle(update('next', { bHasWinner: true }));
+				restored.series.tracker.handle(ev('MatchEnded', { WinnerTeamNum: 1 }));
+				expect(restored.series.status).toBe('running');
+				expect(restored.series.matches).toHaveLength(1);
+			});
+
+			it('starts with another match whose MatchCreated and MatchInitialized were missed', () => {
+				const { series, match } = setup({ games: 1 });
+				match.send(update('first'));
+				match.send(ev('MatchEnded', { WinnerTeamNum: 0 }));
+
+				// Not another match: its end screen, a replay, or no guid to tell them apart.
+				match.send(update('first'));
+				match.send(update('second', { bHasWinner: true }));
+				match.send(update('second', { bReplay: true }));
+				match.send(update(''));
+				match.send(update(undefined));
+				expect(series.status).toBe('finished');
+				expect(series.tracker.matchEnded).toBe(true);
+
+				match.send(update('second'));
+				expect(series.status).toBe('running');
+				expect(series.tracker.matchStarted).toBe(true);
+				match.send(ev('MatchEnded', { WinnerTeamNum: 1 }));
+				expect(series.getResult().matches.map((m) => [m.matchGuid, m.winnerTeamNum])).toEqual([['second', 1]]);
+			});
 		});
 
 		it('does not restart after stop() until start() or restart()', () => {

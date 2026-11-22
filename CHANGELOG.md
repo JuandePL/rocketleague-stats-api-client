@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- With `autoStart`, the series after a finished one starts when the next match starts, instead of when it ends: during that match `getResult()`, `status` and the snapshots are already the new series at 0-0, and `onSeriesStart` / `onUpdate` are called then. A first match left before its end is kept in the `abortedMatches` of the new series. To keep the finished result longer, save it in `onSeriesEnd`, call `stop()` or use `autoStart: false` ([#21]).
+
+### Fixed
+
+- Joining on the end screen of a match (`bHasWinner`), for example after restarting the app, is no longer taken for a match being played ([#21]).
+- A match whose `MatchCreated` and `MatchInitialized` were missed after the previous one ended, for example while reconnecting, is tracked from its first `UpdateState` with another `MatchGuid`, instead of being ignored until the one after ([#21]).
+
 ## [1.4.0] - 2026-11-20
 
 ### Added
@@ -146,3 +155,4 @@ First stable release, published as `@juande_pl/rocketleague-stats-api-client`.
 [#16]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/16
 [#18]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/18
 [#19]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/19
+[#21]: https://github.com/JuandePL/rocketleague-stats-api-client/pull/21
