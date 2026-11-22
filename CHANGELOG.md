@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-22
+
 ### Added
 
 - `tracker.phase` (`'none'`, `'lobby'`, `'playing'`, `'paused'`, `'replay'` or `'ended'`): what is on screen, also telling an end screen from a replay. Also `tracker.setPaused()` and `tracker.watchingReplay` ([#21]).
@@ -153,7 +155,8 @@ First stable release, published as `@juande_pl/rocketleague-stats-api-client`.
 
 - The package was renamed from `rocketleague-stats-api-client` to `@juande_pl/rocketleague-stats-api-client`.
 
-[Unreleased]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/JuandePL/rocketleague-stats-api-client/compare/v1.1.0...v1.2.0
