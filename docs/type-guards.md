@@ -26,3 +26,11 @@ Guards accept extra, undocumented fields, so new fields added by a game update d
 ## Building blocks
 
 The building blocks (`shape`, `optional`, `arrayOf`, `oneOf`, `isString`, `isNumber`, …) are exported too, so you can write guards for your own types the same way.
+
+## Sending events on
+
+`serializeEvent(event)` is the inverse of `parseEventMessage`: the event as the game sends it, to relay it to other programs or to fake the game in tests.
+
+```ts
+client.onAny((event) => socket.send(serializeEvent(event)));
+```

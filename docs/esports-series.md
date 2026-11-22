@@ -60,6 +60,7 @@ See also [examples/esports.ts](../examples/esports.ts).
 | `abortedMatches` / `onMatchAbort` | Matches left before their end. See [Which matches count](#which-matches-count). |
 | `onSeriesStart` / `onMatchEnd` / `onSeriesEnd` | Listeners. `onSeriesStart` also fires on automatic restarts. Each returns an unsubscribe function. |
 | `adjustWins(team, delta)` / `setWins(team, wins)` / `winsOf(team)` / `removeLastMatch()` | Fix the score by hand. See [Fixing the score by hand](#fixing-the-score-by-hand). |
+| `teamResult(team, result?)` | A team's results by name or `TeamNum`, also before it played (zeros, and every timeout left to show). Pass `getLiveResult()` as `result` for live ones. |
 | `renameTeams(renames)` | Renames teams in everything recorded. See [Renaming teams](#renaming-teams). |
 | `snapshot({ timeline })` / `restore(snapshot)` | Save and bring back the series. See [Saving and restoring a series](#saving-and-restoring-a-series). |
 | `onUpdate`             | Called after anything stored changes (start, stop, matches, manual wins, timeouts, restore). Not on every `UpdateState`. |

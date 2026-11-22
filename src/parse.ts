@@ -45,6 +45,14 @@ export interface ParseOptions {
 }
 
 /**
+ * An event as the game sends it: the inverse of {@link parseEventMessage}, for example to relay events or to
+ * fake the game in tests. `Data` is a JSON string inside the envelope.
+ */
+export function serializeEvent(event: StatsApiEvent): string {
+	return JSON.stringify({ Event: event.Event, Data: JSON.stringify(event.Data) });
+}
+
+/**
  * Decodes a message coming from the Stats API socket.
  *
  * Accepts the raw JSON text, or an already `JSON.parse`d envelope. The game encodes

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	CommandValidationError,
 	NotConnectedError,
+	parseEventMessage,
 	RocketLeagueStatsClient,
+	serializeEvent,
 	type StatsApiClientOptions,
 	type StatsApiEvent,
 	type WebSocketLike,
@@ -373,5 +375,14 @@ describe('type-level listener checks', () => {
 		// @ts-expect-error -- unknown event name
 		client.on('NotAnEvent', () => {});
 		expect(true).toBe(true);
+	});
+});
+
+describe('serializeEvent', () => {
+	it.each(Object.entries(fixtures))('%s comes back the same through parseEventMessage', (Event, Data) => {
+		const event = { Event, Data } as StatsApiEvent;
+		const text = serializeEvent(event);
+		expect(typeof JSON.parse(text).Data).toBe('string');
+		expect(parseEventMessage(text)).toEqual({ ok: true, event: JSON.parse(JSON.stringify(event)) });
 	});
 });

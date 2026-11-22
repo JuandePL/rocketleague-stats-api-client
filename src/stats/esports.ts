@@ -364,6 +364,27 @@ function decidedIn(teams: readonly SeriesTeamResult[]): number {
 	return teams.reduce((sum, team) => sum + team.wins, 0);
 }
 
+/** A team with nothing in the series. */
+function emptyTeam(name: string): SeriesTeamResult {
+	return {
+		name,
+		matches: 0,
+		wins: 0,
+		winPercent: 0,
+		goals: 0,
+		shots: 0,
+		shootingPercent: 0,
+		possessionPercent: 0,
+		boostUsed: 0,
+		boostPerMinute: 0,
+		secondsPlayed: 0,
+		timeoutsUsed: 0,
+		timeoutsLeft: 0,
+		manualWins: 0,
+		...teamPlayerTotals([]),
+	};
+}
+
 function normalizeOptions(options: Partial<SeriesOptions>): Required<SeriesOptions> {
 	const games = options.games ?? 5;
 	if (!Number.isInteger(games) || games < 1) throw new RangeError(`games must be a positive integer, got ${games}.`);
@@ -819,6 +840,19 @@ export class EsportsSeries {
 		return this.#winsOf(this.teamOf(team));
 	}
 
+	/**
+	 * A team's results by name or `TeamNum` (see {@link teamOf}), also before it played: then zeros, with every
+	 * timeout left to show (it can't call one until it has played: see {@link timeoutsLeft}). Pass a `result` to
+	 * read from it, for example `getLiveResult()`, instead of computing one for each team.
+	 */
+	teamResult(teamOrNum: string | TeamNum, result: SeriesResult = this.getResult()): SeriesTeamResult {
+		const name = this.teamOf(teamOrNum);
+		const found = result.teams.find((team) => team.name === name);
+		if (found) return found;
+		const timeoutsUsed = result.timeouts.filter((timeout) => timeout.team === name).length;
+		return { ...emptyTeam(name), timeoutsUsed, timeoutsLeft: Math.max(0, result.options.timeouts - timeoutsUsed) };
+	}
+
 	#winsOf(team: string): number {
 		return this.#teams(this.#matches).find((entry) => entry.name === team)?.wins ?? 0;
 	}
@@ -951,23 +985,7 @@ export class EsportsSeries {
 			let entry = teams.get(name);
 			if (!entry) {
 				entry = {
-					result: {
-						name,
-						matches: 0,
-						wins: 0,
-						winPercent: 0,
-						goals: 0,
-						shots: 0,
-						shootingPercent: 0,
-						possessionPercent: 0,
-						boostUsed: 0,
-						boostPerMinute: 0,
-						secondsPlayed: 0,
-						timeoutsUsed: 0,
-						timeoutsLeft: 0,
-						manualWins: 0,
-						...teamPlayerTotals([]),
-					},
+					result: emptyTeam(name),
 					possession: 0,
 					decided: 0,
 					playerGoals: 0,

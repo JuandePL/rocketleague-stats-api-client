@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `SeriesResult.matchesDecided` and `SeriesResult.currentMatch`: the number of matches decided and the match to show, wins by hand counted ([#21]).
 - `series.renameTeams(renames)` and `renameSnapshotTeams(snapshot, renames)`: rename teams in everything recorded, all at once ([#21]).
 - `series.snapshot({ timeline: false })`: a much smaller snapshot ([#21]).
+- `series.teamResult(team, result?)`: a team's results by name or side, zeros if it didn't play ([#21]).
+- `serializeEvent(event)`: an event as the game sends it, the inverse of `parseEventMessage` ([#21]).
 - `mirror` option of `EsportsSeries`: a copy of a series kept elsewhere, fed with snapshots, that doesn't count its matches twice ([#21]).
 - `EventRelay`: an event source that outlives the clients ([#21]).
 

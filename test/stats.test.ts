@@ -2542,3 +2542,36 @@ describe('a mirror of a series', () => {
 		expect(series.abortedMatches).toEqual([]);
 	});
 });
+
+describe('teamResult', () => {
+	it('is the team of a result, by name or side', () => {
+		const series = new EsportsSeries(undefined, { timeouts: 2 });
+		const match = new Match((event) => series.tracker.handle(event));
+		match.start();
+		match.play(3);
+		match.end(0, [2, 1]);
+		series.callTimeout('Blue');
+		const result = series.getResult();
+		expect(series.teamResult('Blue')).toEqual(result.teams.find((team) => team.name === 'Blue'));
+		expect(series.teamResult(1)).toMatchObject({ name: 'Orange', goals: 1, timeoutsLeft: 2 });
+		expect(series.teamResult('Blue', result)).toMatchObject({ wins: 1, timeoutsUsed: 1, timeoutsLeft: 1 });
+		series.dispose();
+	});
+
+	it('is zeros for a team that did not play, with every timeout left', () => {
+		const series = new EsportsSeries(undefined, { timeouts: 2 });
+		expect(series.teamResult('Nobody')).toMatchObject({ name: 'Nobody', wins: 0, manualWins: 0, saves: 0, timeoutsUsed: 0, timeoutsLeft: 2 });
+		expect(series.timeoutsLeft('Nobody')).toBe(0); // it can't call one
+		series.adjustWins('Nobody', 1);
+		expect(series.teamResult('Nobody')).toMatchObject({ wins: 1, manualWins: 1, timeoutsLeft: 2 });
+	});
+
+	it('reads the live match from a live result', () => {
+		const series = new EsportsSeries();
+		const match = new Match((event) => series.tracker.handle(event));
+		match.start();
+		match.play(3);
+		expect(series.teamResult('Blue').matches).toBe(0);
+		expect(series.teamResult('Blue', series.getLiveResult()).matches).toBe(1);
+	});
+});
