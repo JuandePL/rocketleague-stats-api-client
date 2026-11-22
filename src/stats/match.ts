@@ -15,10 +15,35 @@ import {
 	type PlayerIdentifier,
 	type TeamSplit,
 } from './helpers.js';
+import { teamPlayerTotals } from './totals.js';
 
-/** Anything that delivers every game event, such as `RocketLeagueStatsClient`. */
+/** Anything that delivers every game event, such as `RocketLeagueStatsClient` or an `EventRelay`. */
 export interface StatsEventSource {
 	onAny(listener: AnyEventListener): Unsubscribe;
+}
+
+/**
+ * What is on screen, see {@link MatchTracker.phase}.
+ * - `none`: no match (nothing received yet, or the lobby was left).
+ * - `lobby`: after `MatchCreated`, before the match starts.
+ * - `playing`: the match is being played.
+ * - `paused`: it is paused.
+ * - `replay`: a replay in the middle of it, like the one of a goal.
+ * - `ended`: it is over and still on screen, even if the game says `bReplay` there.
+ */
+export type MatchPhase = 'none' | 'lobby' | 'playing' | 'paused' | 'replay' | 'ended';
+
+/** Totals of the players of a team. */
+export interface TeamPlayerTotals {
+	/** Points of the players (not the goals of the team). */
+	score: number;
+	assists: number;
+	saves: number;
+	demos: number;
+	touches: number;
+	carTouches: number;
+	/** Seconds in the air, summed over the players. */
+	airTime: number;
 }
 
 /** Boost used by one player. */
@@ -113,6 +138,25 @@ export function formatMatchClock(timeSeconds: number, overtime = false, options:
 	return overtime ? `+${clock}` : clock;
 }
 
+/** The clock of a match before its first second. Matches of another length joined there count as being played. */
+const MATCH_SECONDS = 300;
+
+/** Nothing played yet: full clock and no goals. */
+function untouched(game: Game): boolean {
+	return !game.bOvertime && game.TimeSeconds === MATCH_SECONDS && game.Teams.every((team) => team.Score === 0);
+}
+
+/** More than this back up on the clock isn't the same match. */
+const CLOCK_RESTART_SECONDS = 30;
+
+/** The clock went back up, or out of overtime, and there are no more goals than before: another match. */
+function startedAgain(before: Game, now: Game): boolean {
+	if (now.bOvertime) return false;
+	const wentBack = before.bOvertime || now.TimeSeconds > before.TimeSeconds + CLOCK_RESTART_SECONDS;
+	const goals = (game: Game) => game.Teams.reduce((sum, team) => sum + team.Score, 0);
+	return wentBack && goals(now) <= goals(before);
+}
+
 /**
  * A stretch of time a player was in the match, on one team. A new session starts every time the player
  * joins (or comes back) and every time they change team.
@@ -181,7 +225,7 @@ export interface MatchPlayerResult extends TrackedPlayerStats {
 }
 
 /** Everything about one team in one match. */
-export interface MatchTeamResult {
+export interface MatchTeamResult extends TeamPlayerTotals {
 	TeamNum: TeamNum;
 	/** `Game.Teams[].Name`, or the `identifyTeam` option. */
 	name: string;
@@ -366,6 +410,16 @@ export class MatchTracker {
 	#lastGame: Game | undefined;
 	#lastPlayers: Player[] = [];
 	#matchGuid: string | undefined;
+	/** Joined when the match already had a winner: it is over, but its `MatchEnded` wasn't seen (yet). */
+	#joinedEnded = false;
+	/** Joined without `MatchCreated` on an untouched clock: a lobby (or first countdown), until the clock moves. */
+	#joinedLobby = false;
+	/** The lobby of the current match was destroyed: from then on, updates alone don't say that a match started. */
+	#destroyed = false;
+	/** A match or lobby is on screen: `false` from `MatchDestroyed` until something of a match arrives. */
+	#onScreen = false;
+	/** From `ReplayCreated` until `MatchDestroyed`. */
+	#watchingReplay = false;
 
 	// Accumulators (ticks are converted to seconds with the measured clock time)
 	#liveTicks = 0;
@@ -410,6 +464,14 @@ export class MatchTracker {
 		this.#detach = source.onAny((event) => this.handle(event));
 	}
 
+	/**
+	 * Pauses or resumes the tracking, like `MatchPaused` / `MatchUnpaused`. Call it when your app sends
+	 * `SetMatchPaused`, to not wait for the game's event. Calling it again with the same value changes nothing.
+	 */
+	setPaused(paused: boolean): void {
+		this.#paused = paused;
+	}
+
 	/** Stops listening to the client. The collected stats are kept. */
 	detach(): void {
 		this.#detach?.();
@@ -429,16 +491,35 @@ export class MatchTracker {
 	 * it is `false` in the lobby after `MatchCreated`, before the match starts.
 	 *
 	 * If the tracker joins mid-match (no `MatchCreated` or `MatchInitialized` seen), it is `true` from the first
-	 * `UpdateState`, unless that match already has a winner (`bHasWinner`: the tracker joined on its end screen).
+	 * `UpdateState`, unless that match already has a winner (`bHasWinner`: the tracker joined on its end screen) or
+	 * is untouched at 5:00 and 0-0 (a lobby: then from `MatchInitialized`, `RoundStarted` or the clock moving).
 	 * If only `MatchInitialized` was missed, it is `true` from the first `RoundStarted`.
 	 */
 	get matchStarted(): boolean {
 		return this.#started && !this.#ended;
 	}
 
-	/** `true` after `MatchEnded`, until the next match starts. */
+	/**
+	 * `true` after `MatchEnded`, until the next match starts. Also when the tracker joined on the end screen of a
+	 * match (`bHasWinner`), whose `MatchEnded` it didn't see.
+	 */
 	get matchEnded(): boolean {
-		return this.#ended && !this.#aborted;
+		return (this.#ended || this.#joinedEnded) && !this.#aborted;
+	}
+
+	/** What is on screen right now, from the events: see {@link MatchPhase}. */
+	get phase(): MatchPhase {
+		if (!this.#onScreen) return 'none';
+		if (this.matchEnded) return 'ended';
+		if (this.#aborted) return 'none';
+		if (!this.#started) return this.#inLobby ? 'lobby' : 'none';
+		if (this.#paused) return 'paused';
+		return this.#lastGame?.bReplay ? 'replay' : 'playing';
+	}
+
+	/** `true` from `ReplayCreated` (a replay opened from the match history) until `MatchDestroyed`. */
+	get watchingReplay(): boolean {
+		return this.#watchingReplay;
 	}
 
 	/**
@@ -455,7 +536,7 @@ export class MatchTracker {
 	 * is being played, use {@link matchStarted}.
 	 */
 	get matchInProgress(): boolean {
-		return this.#lastGame !== undefined && !this.#ended;
+		return this.#lastGame !== undefined && !this.#ended && !this.#joinedEnded;
 	}
 
 	/** Teams of the current match with their score, ordered by `TeamNum`. Empty before the first `UpdateState`. */
@@ -538,6 +619,9 @@ export class MatchTracker {
 		this.#lastGame = undefined;
 		this.#lastPlayers = [];
 		this.#matchGuid = undefined;
+		this.#joinedEnded = false;
+		this.#joinedLobby = false;
+		this.#destroyed = false;
 		this.#liveTicks = 0;
 		this.#secondsPlayed = 0;
 		this.#possessionTicks = { blue: 0, orange: 0 };
@@ -572,10 +656,17 @@ export class MatchTracker {
 	handle(event: StatsApiEvent): void {
 		this.#sequence++;
 		// A new match clears the timeline, so it is recorded after the reset.
+		// A round after an end screen the tracker joined on, or after the lobby of the ended match was closed, is of
+		// another match.
+		if (event.Event === 'RoundStarted' && (this.#joinedEnded || (this.#ended && this.#destroyed))) this.reset();
 		const startsMatch = event.Event === 'MatchCreated' || event.Event === 'MatchInitialized';
 		if (!startsMatch) this.#record(event);
+		if (startsMatch || event.Event === 'RoundStarted' || event.Event === 'UpdateState' || event.Event === 'MatchEnded') this.#onScreen = true;
 
 		switch (event.Event) {
+			case 'ReplayCreated':
+				this.#watchingReplay = true;
+				break;
 			case 'MatchCreated':
 				this.reset();
 				this.#inLobby = true;
@@ -613,7 +704,11 @@ export class MatchTracker {
 				break;
 			case 'UpdateState': {
 				const { Game, Players, MatchGuid } = event.Data;
-				if (this.#ended && this.#isAnotherMatch(Game, MatchGuid)) this.reset();
+				if (this.#isAnotherMatch(Game, MatchGuid)) {
+					// Its end was missed: what was played is kept as a match left before its end.
+					if (this.matchStarted && this.#secondsPlayed > 0) this.#abort();
+					this.reset();
+				}
 				if (!this.#ended) this.#tick(Game, Players, MatchGuid);
 				break;
 			}
@@ -621,7 +716,10 @@ export class MatchTracker {
 				if (!this.#ended) this.#end(event.Data.WinnerTeamNum);
 				break;
 			case 'MatchDestroyed':
-				if (this.#ended) break; // the usual case: the lobby is closed after the end
+				this.#onScreen = false;
+				this.#watchingReplay = false;
+				this.#destroyed = true;
+				if (this.#ended || this.#joinedEnded) break; // the usual case: the lobby is closed after the end
 				if (this.#started && this.#secondsPlayed > 0) {
 					this.#abort();
 				} else {
@@ -637,11 +735,20 @@ export class MatchTracker {
 	}
 
 	/**
-	 * After the end, an `UpdateState` of another match being played: its `MatchCreated` and `MatchInitialized`
-	 * were missed, for example while reconnecting. The end screen and replays are not.
+	 * An `UpdateState` of another match than the tracked one: its start was missed, for example while reconnecting.
+	 *
+	 * `MatchGuid` alone can't tell: matches played one after another in the same lobby have the same one, and not
+	 * every match has one. So also when the clock went back up (or out of overtime) without more goals.
+	 * After `MatchDestroyed`, only events say that a match starts: the next lobby already sends updates.
 	 */
 	#isAnotherMatch(game: Game, matchGuid: string | undefined): boolean {
-		return !game.bHasWinner && !game.bReplay && !!matchGuid && !!this.#matchGuid && matchGuid !== this.#matchGuid;
+		if (this.#destroyed || this.#watchingReplay || !(this.#started || this.matchEnded)) return false;
+		const otherGuid = !!matchGuid && !!this.#matchGuid && matchGuid !== this.#matchGuid;
+		// Another end screen replaces the one joined on.
+		if (this.#joinedEnded && otherGuid) return true;
+		const beingPlayed = !game.bHasWinner && !game.bReplay;
+		if (this.matchEnded && !beingPlayed) return false;
+		return otherGuid || (beingPlayed && this.#lastGame !== undefined && startedAgain(this.#lastGame, game));
 	}
 
 	#record(event: StatsApiEvent): void {
@@ -701,12 +808,18 @@ export class MatchTracker {
 	}
 
 	#tick(game: Game, players: Player[], matchGuid: string | undefined): void {
-		// Without MatchCreated first, this is not a lobby: the tracker joined a match already being played,
-		// unless it has a winner, like on the end screen.
-		if (!this.#inLobby && !game.bHasWinner) this.#begin();
+		// Without MatchCreated first, the tracker joined a match already being played, unless it has a winner (the
+		// end screen) or nothing was played yet (the lobby, which looks the same from its updates).
+		if (!this.#started && (!this.#inLobby || this.#joinedLobby)) {
+			if (game.bHasWinner) this.#joinedEnded = true;
+			else if (!this.#joinedEnded) {
+				if (untouched(game)) this.#inLobby = this.#joinedLobby = true;
+				else this.#begin();
+			}
+		}
 		this.#lastGame = game;
 		this.#lastPlayers = players;
-		this.#matchGuid = matchGuid ?? this.#matchGuid;
+		this.#matchGuid = matchGuid || this.#matchGuid;
 
 		// Remember every player's latest scoreboard, so it survives if they leave.
 		const entries = players.map((player) => [player, this.#accumulator(player)] as const);
@@ -824,6 +937,7 @@ export class MatchTracker {
 	}
 
 	#end(winnerTeamNum: TeamNum): void {
+		this.#joinedEnded = false;
 		const summary = this.#finish(winnerTeamNum);
 		for (const listener of [...this.#matchEndListeners]) listener(summary);
 	}
@@ -885,6 +999,7 @@ export class MatchTracker {
 				boostUsed,
 				boostPerMinute: perMinute(boostUsed, stats.secondsPlayed),
 				possessionPercent: side ? stats.possession.percent[side] : 0,
+				...teamPlayerTotals(members),
 			};
 		});
 	}

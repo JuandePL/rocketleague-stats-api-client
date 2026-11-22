@@ -3,6 +3,7 @@ import {
 	convertSpeed,
 	EsportsSeries,
 	type EsportsSeriesOptions,
+	EventRelay,
 	findEventAfter,
 	formatMatchClock,
 	getMvp,
@@ -12,6 +13,7 @@ import {
 	isBotPrimaryId,
 	MatchTracker,
 	playerKey,
+	renameSnapshotTeams,
 	SeriesTimeoutError,
 	timeBetween,
 	timeFromPlayerLeftTo,
@@ -1053,7 +1055,7 @@ describe('MatchTracker', () => {
 			expect(summary.teamResults).toEqual([
 				{ TeamNum: 0, name: 'Blue', goals: 3, shots: 5, shootingPercent: 60, won: true, boostUsed: 30, boostPerMinute: 30, possessionPercent: 0 },
 				{ TeamNum: 1, name: 'Orange', goals: 1, shots: 2, shootingPercent: 50, won: false, boostUsed: 0, boostPerMinute: 0, possessionPercent: 0 },
-			]);
+			].map((team) => expect.objectContaining(team)));
 			expect(tracker.getTeamResults()).toEqual(summary.teamResults);
 		});
 	});
@@ -2063,5 +2065,480 @@ describe('EsportsSeries: options after the constructor and pause', () => {
 		expect(restored.status).toBe('paused');
 		series.stop();
 		expect(series.status).toBe('stopped');
+	});
+});
+
+describe('what apps build on', () => {
+	const game = (
+		extra: Partial<Game> = {},
+		{ guid = 'one' as string | undefined, players = [] as Player[] } = {},
+	) => ev('UpdateState', { MatchGuid: guid, Players: players, Game: { ...baseGame, bReplay: false, ...extra } });
+	const endScreen = { bHasWinner: true, bReplay: true, TimeSeconds: 0 };
+
+	function context(options: EsportsSeriesOptions = {}) {
+		const series = new EsportsSeries(undefined, options);
+		const send = (...events: StatsApiEvent[]) => events.forEach((event) => series.tracker.handle(event));
+		const play = (winner: 0 | 1, players: Player[] = [player('Ana', 0), player('Bob', 1)], names = ['Blue', 'Orange']) => {
+			const Teams = names.map((Name, i) => ({ ...baseGame.Teams[0]!, TeamNum: i, Name, Score: i === winner ? 1 : 0 }));
+			send(
+				ev('MatchCreated'),
+				ev('MatchInitialized'),
+				ev('RoundStarted'),
+				game({ Teams, TimeSeconds: 300 }, { players, guid: '' }),
+				game({ Teams, TimeSeconds: 299 }, { players, guid: '' }),
+				ev('MatchEnded', { WinnerTeamNum: winner }),
+			);
+		};
+		return { series, tracker: series.tracker, send, play };
+	}
+
+	describe('wins by hand are counted net', () => {
+		it('a corrected result reopens a best of 3', () => {
+			const { series, play } = context({ games: 3 });
+			play(0);
+			play(0);
+			expect(series.status).toBe('finished');
+			series.adjustWins('Blue', -1);
+			series.adjustWins('Orange', 1);
+			expect(series.getResult()).toMatchObject({ status: 'running', matchesDecided: 2, winner: undefined });
+		});
+
+		it('also in the other order, and it can finish the series for the other team', () => {
+			const { series, play } = context({ games: 3 });
+			play(0);
+			play(1);
+			play(0);
+			series.adjustWins('Orange', 1);
+			series.adjustWins('Blue', -1);
+			expect(series.getResult()).toMatchObject({ status: 'finished', winner: 'Orange', matchesDecided: 3 });
+		});
+
+		it('a forfeit still counts as a match', () => {
+			const { series, play } = context({ games: 2, format: 'play-all' });
+			play(0);
+			series.adjustWins('Orange', 1);
+			expect(series.getResult()).toMatchObject({ status: 'finished', matchesDecided: 2 });
+		});
+	});
+
+	describe('joined on an end screen', () => {
+		it('says it ended, without starting or recording anything', () => {
+			const { series, tracker, send } = context();
+			const onStart = vi.fn();
+			const onEnd = vi.fn();
+			tracker.onMatchStart(onStart);
+			tracker.onMatchEnd(onEnd);
+			send(game(endScreen), game(endScreen));
+			expect(tracker).toMatchObject({ matchEnded: true, matchStarted: false, matchInProgress: false, phase: 'ended' });
+			expect(onStart).not.toHaveBeenCalled();
+			expect(onEnd).not.toHaveBeenCalled();
+			expect(series.matches).toHaveLength(0);
+		});
+
+		it.each([
+			['another guid', 'two'],
+			['no guid', ''],
+		])('the next match starts clean when its start was missed (%s)', (_case, guid) => {
+			const { tracker, send } = context();
+			send(game(endScreen, { guid: guid && 'one', players: [player('Old', 0)] }), game({}, { guid, players: [player('New', 0)] }));
+			expect(tracker.matchStarted).toBe(true);
+			expect(tracker.getPlayerResults().map((result) => result.Name)).toEqual(['New']);
+		});
+
+		it('also from RoundStarted, which stays in the timeline', () => {
+			const { tracker, send } = context();
+			send(game(endScreen, { players: [player('Old', 0)] }), ev('RoundStarted'));
+			expect(tracker.matchStarted).toBe(true);
+			expect(tracker.getPlayerResults()).toEqual([]);
+			expect(tracker.getTimeline().map((entry) => entry.event.Event)).toEqual(['RoundStarted']);
+		});
+
+		it('the end screen of another match replaces it', () => {
+			const { tracker, send } = context();
+			send(game(endScreen, { players: [player('Old', 0)] }), game(endScreen, { guid: 'two', players: [player('New', 0)] }));
+			expect(tracker.matchEnded).toBe(true);
+			expect(tracker.getPlayerResults().map((result) => result.Name)).toEqual(['New']);
+		});
+
+		it('stays ended when its lobby is closed, also with updates still arriving', () => {
+			const { tracker, send } = context();
+			send(game(endScreen), ev('MatchDestroyed'));
+			expect(tracker.phase).toBe('none');
+			send(game());
+			expect(tracker).toMatchObject({ matchStarted: false, matchEnded: true });
+		});
+
+		it('joined before MatchEnded (golden goal replay), that match is recorded', () => {
+			const { series, send } = context();
+			send(game({ bHasWinner: true, bReplay: true }), ev('MatchEnded', { WinnerTeamNum: 1 }));
+			expect(series.matches.map((match) => match.winnerTeamNum)).toEqual([1]);
+		});
+	});
+
+	describe('a missed end', () => {
+		it('the next match starts clean, and what was played is kept as aborted', () => {
+			const { series, tracker, send } = context();
+			const old = { players: [player('Old', 0)] };
+			send(ev('MatchInitialized'), ev('RoundStarted'), game({ TimeSeconds: 300 }, old), game({ TimeSeconds: 299 }, old));
+			send(game({ TimeSeconds: 300 }, { guid: 'two', players: [player('New', 0)] }));
+			expect(tracker.matchStarted).toBe(true);
+			expect(tracker.getPlayerResults().map((result) => result.Name)).toEqual(['New']);
+			expect(series.abortedMatches.map((match) => match.matchGuid)).toEqual(['one']);
+		});
+
+		it.each(['', undefined])('a packet without guid (%j) is the same match', (guid) => {
+			const { series, tracker, send } = context();
+			send(ev('MatchInitialized'), ev('RoundStarted'), game({ TimeSeconds: 300 }), game({ TimeSeconds: 299 }));
+			send({ Event: 'UpdateState', Data: { MatchGuid: guid, Players: [], Game: { ...baseGame, TimeSeconds: 298 } } } as StatsApiEvent);
+			send(game({ TimeSeconds: 297 }));
+			expect(tracker.matchStarted).toBe(true);
+			expect(series.abortedMatches).toEqual([]);
+		});
+	});
+
+	// As seen in the game: a rematch in the same lobby keeps the MatchGuid.
+	describe('matches one after another with the same MatchGuid', () => {
+		const at = (TimeSeconds: number, score: number, extra: Partial<Game> = {}) =>
+			game({ TimeSeconds, Teams: [{ ...baseGame.Teams[0]!, Score: score }], ...extra });
+		const begin = [ev('MatchCreated'), ev('MatchInitialized'), ev('RoundStarted'), at(300, 0)];
+
+		it.each([
+			['regulation', at(0, 3, { bHasWinner: true, bReplay: true })],
+			['overtime', at(40, 3, { bHasWinner: true, bReplay: true, bOvertime: true })],
+		])('the next one starts when its start was missed, after %s', (_case, end) => {
+			const { series, tracker, send } = context({ games: 1 });
+			send(...begin, end, ev('MatchEnded', { WinnerTeamNum: 0 }), end);
+			expect(series.status).toBe('finished');
+			send(at(285, 0));
+			expect(tracker.matchStarted).toBe(true);
+			expect(series.status).toBe('running');
+		});
+
+		it('when the end was missed too, what was played is kept as aborted', () => {
+			const { series, tracker, send } = context();
+			send(...begin, at(299, 1), at(120, 2), at(119, 2), at(298, 0));
+			expect(tracker).toMatchObject({ matchStarted: true });
+			expect(series.abortedMatches).toHaveLength(1);
+		});
+
+		it('when the end was missed in overtime', () => {
+			const { series, send } = context();
+			send(...begin, at(299, 1), at(12, 2, { bOvertime: true }), at(280, 0));
+			expect(series.abortedMatches).toHaveLength(1);
+		});
+
+		it('goals, goal replays, small steps of the clock and overtime are the same match', () => {
+			const { series, send } = context();
+			send(
+				...begin,
+				at(259, 1),
+				at(259, 1, { bReplay: true }),
+				at(259, 1),
+				at(260, 1),
+				at(100, 1),
+				at(290, 1, { bReplay: true }),
+				at(99, 1),
+				at(0, 1),
+				at(1, 1, { bOvertime: true }),
+				at(90, 1, { bOvertime: true }),
+			);
+			expect(series.abortedMatches).toEqual([]);
+			expect(series.tracker.matchStarted).toBe(true);
+		});
+
+		it('an end screen without the winner flag does not clear the result', () => {
+			const { series, send } = context({ games: 1 });
+			send(...begin, at(0, 3), ev('MatchEnded', { WinnerTeamNum: 0 }), at(0, 3), at(0, 3, { bReplay: true }));
+			expect(series.status).toBe('finished');
+		});
+
+		it('the lobby after the old one was closed keeps the result, also before MatchCreated', () => {
+			const { series, tracker, send } = context({ games: 1 });
+			send(...begin, at(0, 3), ev('MatchEnded', { WinnerTeamNum: 0 }), ev('MatchDestroyed'), at(300, 0));
+			send(game({}, { guid: 'another server' }));
+			expect(series.status).toBe('finished');
+			send(ev('RoundStarted'));
+			expect(tracker.matchStarted).toBe(true);
+			expect(series.status).toBe('running');
+		});
+
+		it('seeking back in a replay from the match history is not another match', () => {
+			const { series, send } = context();
+			send(ev('ReplayCreated', { FileName: 'a', Date: '' }), ...begin, at(120, 2), at(119, 2), at(280, 0));
+			expect(series.abortedMatches).toEqual([]);
+		});
+	});
+
+	describe('joined in a lobby', () => {
+		const lobby = game({ TimeSeconds: 300, Teams: [{ ...baseGame.Teams[0]!, Score: 0 }] });
+
+		it('is a lobby: a restored result stays', () => {
+			const { series, play } = context({ games: 1 });
+			play(0);
+			const joined = context({ games: 1 });
+			joined.series.restore(series.snapshot());
+			joined.send(lobby, lobby);
+			expect(joined.tracker).toMatchObject({ phase: 'lobby', matchStarted: false });
+			expect(joined.series.status).toBe('finished');
+		});
+
+		it.each([
+			['MatchInitialized', ev('MatchInitialized')],
+			['RoundStarted', ev('RoundStarted')],
+			['the clock moving', game({ TimeSeconds: 299, Teams: [{ ...baseGame.Teams[0]!, Score: 0 }] })],
+		])('starts with %s', (_case, event) => {
+			const { tracker, send } = context();
+			send(lobby, event);
+			expect(tracker.matchStarted).toBe(true);
+		});
+	});
+
+	describe('phase', () => {
+		it('follows a match from the lobby to the end', () => {
+			const { tracker, send } = context();
+			expect(tracker.phase).toBe('none');
+			send(ev('MatchCreated'), game());
+			expect(tracker.phase).toBe('lobby');
+			send(ev('MatchInitialized'), game());
+			expect(tracker.phase).toBe('playing');
+			send(game({ bReplay: true }));
+			expect(tracker.phase).toBe('replay');
+			send(ev('MatchPaused'));
+			expect(tracker.phase).toBe('paused');
+			send(ev('MatchUnpaused'), ev('MatchEnded', { WinnerTeamNum: 0 }), game(endScreen));
+			expect(tracker.phase).toBe('ended');
+			send(ev('MatchDestroyed'));
+			expect(tracker.phase).toBe('none');
+			send(game(endScreen)); // the game can go on showing it
+			expect(tracker.phase).toBe('ended');
+		});
+
+		it('is none after leaving a match', () => {
+			const { tracker, send } = context();
+			send(ev('MatchInitialized'), ev('RoundStarted'), game({ TimeSeconds: 300 }), game({ TimeSeconds: 299 }), ev('MatchDestroyed'));
+			expect(tracker.phase).toBe('none');
+		});
+
+		it('setPaused pauses like the event', () => {
+			const { tracker, send } = context();
+			send(ev('MatchInitialized'), ev('RoundStarted'), game({ TimeSeconds: 300 }));
+			tracker.setPaused(true);
+			send(game({ TimeSeconds: 299 }));
+			expect(tracker).toMatchObject({ phase: 'paused', paused: true });
+			expect(tracker.getStats().secondsPlayed).toBe(0);
+			tracker.setPaused(false);
+			expect(tracker.phase).toBe('playing');
+		});
+	});
+
+	it('a replay from the match history does not clear a finished series', () => {
+		const { series, tracker, send, play } = context({ games: 1 });
+		play(0);
+		send(ev('MatchDestroyed'), ev('ReplayCreated', { FileName: 'a', Date: '' }), ev('MatchCreated'), ev('MatchInitialized'), game());
+		expect(tracker.watchingReplay).toBe(true);
+		expect(series.status).toBe('finished');
+		send(ev('MatchDestroyed'), ev('MatchCreated'), ev('MatchInitialized'));
+		expect(tracker.watchingReplay).toBe(false);
+		expect(series.status).toBe('running');
+	});
+
+	describe('currentMatch', () => {
+		it('is the match being played, the one just over on its end screen, then the next', () => {
+			const { series, send, play } = context({ games: 3 });
+			const current = () => series.getResult().currentMatch;
+			expect(current()).toBe(1);
+			play(0);
+			expect(current()).toBe(1);
+			send(ev('MatchDestroyed'));
+			expect(current()).toBe(2);
+			send(ev('MatchCreated'), ev('MatchInitialized'));
+			expect(current()).toBe(2);
+			send(game(), ev('MatchEnded', { WinnerTeamNum: 0 }), ev('MatchDestroyed'));
+			expect(series.status).toBe('finished');
+			expect(current()).toBe(2);
+			send(ev('MatchCreated'), ev('MatchInitialized'));
+			expect(current()).toBe(1);
+		});
+
+		it('counts the wins by hand', () => {
+			const { series, play } = context();
+			series.adjustWins('Orange', 1);
+			expect(series.getResult().currentMatch).toBe(2);
+			play(0);
+			expect(series.getResult()).toMatchObject({ currentMatch: 2, matchesDecided: 2 });
+		});
+
+		it('a match that ended while paused is not counted', () => {
+			const { series, play } = context();
+			play(0);
+			series.pause();
+			play(0);
+			expect(series.getResult()).toMatchObject({ currentMatch: 2, matchesDecided: 1 });
+		});
+	});
+
+	describe('team totals of players', () => {
+		const stats = { Score: 100, Assists: 2, Saves: 3, Demos: 4, Touches: 5, CarTouches: 6 };
+		const totals = { score: 100, assists: 2, saves: 3, demos: 4, touches: 5, carTouches: 6, airTime: 0 };
+
+		it('are in the results of the match and the series', () => {
+			const { series, tracker, play } = context();
+			play(0, [player('Ana', 0, stats)]);
+			expect(tracker.getTeamResults()[0]).toMatchObject(totals);
+			expect(series.matches[0]!.teamResults[0]).toMatchObject(totals);
+			expect(series.getResult().teams.find((team) => team.name === 'Blue')).toMatchObject(totals);
+		});
+
+		it('a player who changed team counts for each team where they played', () => {
+			const { series, play } = context();
+			play(0, [player('Sub', 0, { Saves: 4 })]);
+			play(0, [player('Sub', 1, { Saves: 1 })]);
+			const saves = (name: string) => series.getResult().teams.find((team) => team.name === name)!.saves;
+			expect([saves('Blue'), saves('Orange')]).toEqual([4, 1]);
+		});
+
+		it('are added to snapshots saved before they existed', () => {
+			const { series, play } = context();
+			play(0, [player('Ana', 0, stats)]);
+			const saved = JSON.parse(JSON.stringify(series.snapshot()));
+			for (const team of saved.matches[0].teamResults) for (const key of Object.keys(totals)) delete team[key];
+			const restored = new EsportsSeries();
+			restored.restore(saved);
+			expect(restored.matches[0]!.teamResults[0]).toMatchObject(totals);
+			expect(restored.getResult().teams.find((team) => team.name === 'Blue')).toMatchObject(totals);
+		});
+	});
+
+	describe('renameTeams', () => {
+		const played = () => {
+			const made = context({ timeouts: 1, timeoutSeconds: 60 });
+			made.play(0, [player('Ana', 0), player('Bob', 1)], ['A', 'B']);
+			made.series.adjustWins('B', 1);
+			made.series.callTimeout('A');
+			return made;
+		};
+
+		it('exchanges two teams everywhere, at once', () => {
+			const { series } = played();
+			const onUpdate = vi.fn();
+			series.onUpdate(onUpdate);
+			series.renameTeams({ A: 'B', B: 'A' });
+			expect(onUpdate).toHaveBeenCalledOnce();
+			const [match] = series.matches;
+			expect(match!.teamResults.map((team) => team.name)).toEqual(['B', 'A']);
+			expect(match!.mvp).toMatchObject({ team: 'B', sessions: [{ team: 'B' }] });
+			expect(series.getResult().manualWins).toEqual({ A: 1 });
+			expect([series.winsOf('A'), series.winsOf('B')]).toEqual([1, 1]);
+			expect(series.activeTimeout?.team).toBe('B');
+			expect([series.timeoutsLeft('A'), series.timeoutsLeft('B')]).toEqual([1, 0]);
+			expect(series.endTimeout()).toMatchObject({ team: 'B', endReason: 'ended' });
+			expect(series.getResult().timeouts[0]).toMatchObject({ team: 'B', endReason: 'ended' });
+		});
+
+		it('takes a Map, and does nothing without changes', () => {
+			const { series } = played();
+			const onUpdate = vi.fn();
+			series.onUpdate(onUpdate);
+			series.renameTeams(new Map([['A', 'A']]));
+			expect(onUpdate).not.toHaveBeenCalled();
+			series.renameTeams(new Map([['A', 'C']]));
+			expect(series.winsOf('C')).toBe(1);
+			series.dispose();
+		});
+
+		it('leaves results given before, and snapshots, as they were', () => {
+			const { series } = played();
+			const before = series.getResult();
+			const snapshot = series.snapshot();
+			const copy = renameSnapshotTeams(snapshot, { A: 'C' });
+			series.renameTeams({ A: 'D' });
+			expect(before.matches[0]!.teamResults[0]!.name).toBe('A');
+			expect(snapshot.matches[0]!.teamResults[0]!.name).toBe('A');
+			expect(copy.matches[0]!.teamResults[0]!.name).toBe('C');
+			series.dispose();
+		});
+
+		it('two teams renamed to one name become one', () => {
+			const { series } = played();
+			series.renameTeams({ B: 'A' });
+			expect(series.winsOf('A')).toBe(2);
+			series.dispose();
+		});
+
+		it('renames matches stored without team results', () => {
+			const { series } = played();
+			const saved = series.snapshot();
+			(saved.matches[0] as { teamResults?: unknown }).teamResults = undefined;
+			series.restore(saved);
+			series.renameTeams({ A: 'C' });
+			expect(series.winsOf('C')).toBe(1);
+			series.dispose();
+		});
+	});
+
+	it('snapshot({ timeline: false }) leaves out the timelines, not the results', () => {
+		const { series, play } = context();
+		play(0);
+		const small = series.snapshot({ timeline: false });
+		expect(small.matches[0]!.timeline).toEqual([]);
+		expect(series.matches[0]!.timeline.length).toBeGreaterThan(0);
+		expect(series.snapshot().matches[0]!.timeline.length).toBeGreaterThan(0);
+		const restored = new EsportsSeries();
+		restored.restore(small);
+		expect(restored.getResult().teams).toEqual(series.getResult().teams);
+	});
+
+	it('EventRelay outlives the sources it forwards', () => {
+		const relay = new EventRelay();
+		const tracker = new MatchTracker(relay);
+		const first = new EventRelay();
+		const second = new EventRelay();
+		const stop = relay.forward(first);
+		first.emit(ev('MatchInitialized'));
+		expect(tracker.matchStarted).toBe(true);
+		stop();
+		first.emit(ev('MatchEnded', { WinnerTeamNum: 0 }));
+		expect(tracker.matchEnded).toBe(false);
+		relay.forward(second);
+		second.emit(ev('MatchEnded', { WinnerTeamNum: 0 }));
+		expect(tracker.matchEnded).toBe(true);
+	});
+});
+
+describe('a mirror of a series', () => {
+	const ended = (series: EsportsSeries) => {
+		const match = new Match((event) => series.tracker.handle(event));
+		match.start();
+		match.play(3);
+		match.end(0, [1, 0]);
+	};
+
+	it('counts a match once, whether the snapshot comes before or after the end', () => {
+		const source = new EsportsSeries();
+		ended(source);
+		const first = new EsportsSeries(undefined, { mirror: true });
+		first.restore(source.snapshot());
+		ended(first);
+		expect(first.winsOf('Blue')).toBe(1);
+
+		const second = new EsportsSeries(undefined, { mirror: true });
+		second.restore(new EsportsSeries().snapshot());
+		ended(second);
+		expect(second.matches).toHaveLength(0);
+		second.restore(source.snapshot());
+		expect(second.winsOf('Blue')).toBe(1);
+	});
+
+	it('never starts by itself, and still has the live match', () => {
+		const series = new EsportsSeries(undefined, { mirror: true, autoStart: true });
+		expect(series.autoStart).toBe(false);
+		expect(series.status).toBe('idle');
+		series.restore(new EsportsSeries().snapshot());
+		const match = new Match((event) => series.tracker.handle(event));
+		match.start();
+		match.play(3);
+		expect(series.getLiveResult().teams.find((team) => team.name === 'Blue')?.matches).toBe(1);
+		match.send(ev('MatchDestroyed'));
+		expect(series.abortedMatches).toEqual([]);
 	});
 });

@@ -8,6 +8,7 @@ export * from './guards/commands.js';
 
 export * from './parse.js';
 export * from './sort.js';
+export * from './relay.js';
 export * from './stats/helpers.js';
 export * from './stats/match.js';
 export * from './stats/esports.js';
